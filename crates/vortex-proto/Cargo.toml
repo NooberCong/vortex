@@ -1,0 +1,21 @@
+[package]
+name = "vortex-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Vortex IPC protocol — single source of truth for daemon, desktop app and extension"
+
+[dependencies]
+serde = { workspace = true }
+rmp-serde = { workspace = true }
+ts-rs = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[features]
+default = ["codec"]
+codec = ["dep:tokio"]

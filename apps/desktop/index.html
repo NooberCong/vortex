@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vortex</title>
+  </head>
+  <body>
+    <!--
+      The boot splash.
+
+      Markup, styles and the mark are inline, and deliberately: this has to paint before
+      the app bundle is parsed, and on a cold start that parse is the longest blank stretch
+      there is. Nothing here is imported, so nothing here can be late.
+
+      It is also short. The whole figure is drawn in 580 ms and `App.svelte` takes it away
+      as soon as the list is on screen — the budget in 05 is 400 ms to a painted list, and
+      a splash that makes the app slower to hold its own animation would be a worse
+      product than no splash at all.
+
+      The window is hidden until this page has loaded (`chrome::show_when_loaded`), so the
+      first thing anyone sees is this rather than an empty frame.
+    -->
+    <div id="splash" aria-hidden="true">
+      <style>
+        /* The tokens file is in the bundle, which has not loaded yet. These four values
+           are the only ones duplicated from it, and `mark.test.ts` checks they still
+           agree with `packages/tokens/tokens.css`. */
+        #splash {
+          --splash-bg: #eef0f5;
+          --splash-ink: #206ae1;
+          --splash-text: #4e5768;
+          position: fixed;
+          inset: 0;
+          z-index: 9999;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 22px;
+          /* The same corner the app shell draws: the window itself has none. The fallback
+             is the value, because this paints before `app.css` is parsed. */
+          border-radius: var(--shell-radius, 8px);
+          background: var(--splash-bg);
+          transition: opacity 0.32s cubic-bezier(0.2, 0, 0, 1);
+        }
+
+        @media (prefers-color-scheme: dark) {
+          :root:not([data-theme="light"]) #splash {
+            --splash-bg: #0a0c11;
+            --splash-ink: #5796fe;
+            --splash-text: #9aa5b8;
+          }
+        }
+
+        :root[data-theme="dark"] #splash {
+          --splash-bg: #0a0c11;
+          --splash-ink: #5796fe;
+          --splash-text: #9aa5b8;
+        }
+
+        #splash.done {
+          opacity: 0;
+          pointer-events: none;
+        }
+
+        #splash .mark {
+          display: block;
+          color: var(--splash-ink);
+          transform-origin: 50% 50%;
+          /* Only ever seen by someone whose daemon is slow to answer: the figure is
+             complete at 580 ms and this starts after it. */
+          animation: mark-turn 14s linear 0.6s infinite;
+        }
+
+        /* `pathLength="1"` normalises each group to one unit, so the draw-in is a plain
+           1 → 0 dashoffset no matter how long the real path is — and because each group
+           is one path of many subpaths, they come in one arm at a time. */
+        #splash .mark > path {
+          stroke-dasharray: 1;
+          stroke-dashoffset: 1;
+          animation: mark-draw var(--for) cubic-bezier(0.2, 0, 0, 1) var(--at) forwards;
+        }
+
+        #splash .mark-spokes {
+          --for: 260ms;
+          --at: 0ms;
+        }
+        #splash .mark-branches {
+          --for: 220ms;
+          --at: 160ms;
+        }
+        #splash .mark-curls {
+          --for: 260ms;
+          --at: 320ms;
+        }
+
+        #splash .word {
+          font-family: system-ui, -apple-system, sans-serif;
+          font-size: 13px;
+          font-weight: 500;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          color: var(--splash-text);
+          animation: word-rise 0.4s cubic-bezier(0.2, 0, 0, 1) 0.25s both;
+        }
+
+        /* Appears only when the daemon takes its time. A fast start never shows it. */
+        #splash .wait {
+          width: 96px;
+          height: 2px;
+          border-radius: 1px;
+          overflow: hidden;
+          background: color-mix(in oklab, var(--splash-text) 20%, transparent);
+          opacity: 0;
+          animation: wait-in 0.4s ease 1.2s forwards;
+        }
+
+        #splash .wait i {
+          display: block;
+          width: 40%;
+          height: 100%;
+          background: var(--splash-ink);
+          animation: wait-scan 1.2s ease-in-out infinite;
+        }
+
+        @keyframes mark-draw {
+          to {
+            stroke-dashoffset: 0;
+          }
+        }
+        @keyframes mark-turn {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+        @keyframes word-rise {
+          from {
+            opacity: 0;
+            transform: translateY(6px);
+          }
+        }
+        @keyframes wait-in {
+          to {
+            opacity: 1;
+          }
+        }
+        @keyframes wait-scan {
+          from {
+            transform: translateX(-100%);
+          }
+          to {
+            transform: translateX(350%);
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          #splash .mark,
+          #splash .word,
+          #splash .wait i {
+            animation: none;
+          }
+          #splash .mark > path {
+            animation: none;
+            stroke-dashoffset: 0;
+          }
+          #splash .wait {
+            opacity: 1;
+            animation: none;
+          }
+        }
+      </style>
+      <!-- mark -->
+      <svg class="mark" width="112" height="112" viewBox="0 0 1024 1024" fill="none"
+           stroke="currentColor" stroke-width="50" stroke-linecap="round" aria-hidden="true">
+        <path class="mark-spokes" pathLength="1" d="M512 512L512 316M512 512L650.6 373.4M512 512L708 512M512 512L650.6 650.6M512 512L512 708M512 512L373.4 650.6M512 512L316 512M512 512L373.4 373.4" />
+        <path class="mark-branches" pathLength="1" d="M512 372L552.7 280.6M512 372L471.3 280.6M611 413L704.4 377.2M611 413L646.8 319.6M652 512L743.4 552.7M652 512L743.4 471.3M611 611L646.8 704.4M611 611L704.4 646.8M512 652L471.3 743.4M512 652L552.7 743.4M413 611L319.6 646.8M413 611L377.2 704.4M372 512L280.6 471.3M372 512L280.6 552.7M413 413L377.2 319.6M413 413L319.6 377.2" />
+        <path class="mark-curls" pathLength="1" d="M508.9 179.3A104 104 0 0 1 628 185.5A104 104 0 0 1 662.9 299.6M745.1 274.5A104 104 0 0 1 824.9 363.2A104 104 0 0 1 768.9 468.5M844.7 508.9A104 104 0 0 1 838.5 628A104 104 0 0 1 724.4 662.9M749.5 745.1A104 104 0 0 1 660.8 824.9A104 104 0 0 1 555.5 768.9M515.1 844.7A104 104 0 0 1 396 838.5A104 104 0 0 1 361.1 724.4M278.9 749.5A104 104 0 0 1 199.1 660.8A104 104 0 0 1 255.1 555.5M179.3 515.1A104 104 0 0 1 185.5 396A104 104 0 0 1 299.6 361.1M274.5 278.9A104 104 0 0 1 363.2 199.1A104 104 0 0 1 468.5 255.1" />
+      </svg>
+      <!-- /mark -->
+      <div class="word">Vortex</div>
+      <div class="wait"><i></i></div>
+    </div>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vortex-proto",
+    "crates/vortex-ipc",
+    "crates/vortex-setup",
+    "crates/vortex-engine",
+    "crates/vortex-media",
+    "crates/vortexd",
+    "crates/vortex-host",
+    "crates/vortex-cli",
+    "apps/desktop/src-tauri",
+    "bench/hostile-server",
+    "bench/throughput",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+vortex-proto  = { path = "crates/vortex-proto" }
+vortex-engine = { path = "crates/vortex-engine" }
+vortex-media  = { path = "crates/vortex-media" }
+vortex-ipc    = { path = "crates/vortex-ipc" }
+vortex-setup  = { path = "crates/vortex-setup" }
+
+anyhow       = "1"
+thiserror    = "2"
+bytes        = "1"
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+rmp-serde    = "1.3"
+tokio        = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "fs", "signal"] }
+tokio-util   = { version = "0.7", features = ["io"] }
+futures      = "0.3"
+tracing      = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+url          = "2"
+percent-encoding = "2"
+roaring      = "0.11"
+parking_lot  = "0.12"
+rand         = "0.9"
+hex          = "0.4"
+base64       = "0.22"
+sha2         = "0.10"
+md-5         = "0.10"
+crc32fast    = "1"
+ts-rs        = "12"
+clap         = { version = "4", features = ["derive"] }
+uuid         = { version = "1", features = ["v4", "serde"] }

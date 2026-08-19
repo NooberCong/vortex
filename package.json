@@ -1,0 +1,20 @@
+{
+  "name": "vortex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/proto",
+    "packages/tokens",
+    "apps/extension",
+    "apps/desktop"
+  ],
+  "scripts": {
+    "check": "npm run check --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "logo": "node scripts/logo.mjs",
+    "sidecars": "node scripts/sidecars.mjs",
+    "bundle": "node scripts/bundle.mjs"
+  }
+}

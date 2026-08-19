@@ -1,0 +1,144 @@
+/*
+ * Vortex design tokens (05 §Tokens).
+ *
+ * The one rule: colour is reserved for data. Everything structural is ink, paper and
+ * hairlines; the only saturated values here are the eight-worker spectrum and the single
+ * attention red, and both of those describe bytes rather than decorate chrome.
+ *
+ * Every selector is written `:root, :host` because this sheet is loaded twice into very
+ * different places — the desktop document, where `:root` is the match, and the page
+ * overlay's shadow root, where only `:host` is. One file, two homes, no divergence.
+ *
+ * ── On the spectrum having two sets of values ──────────────────────────────────────────
+ *
+ * The eight hues are fixed. Their lightness is not, and cannot be: a colour legible on
+ * #0b0e14 is washed out on #ffffff, and one legible on paper is a smear on ink. That is
+ * physics, not taste. So each theme carries the same sweep — aqua, cyan, sky, azure,
+ * indigo, violet, magenta, rose — at the luminance that keeps every lane at least 3:1
+ * against its own track. Hue is the identity; lightness is what makes the identity visible.
+ *
+ * The dark block appears twice, once under `prefers-color-scheme` and once under an
+ * explicit `[data-theme="dark"]`, because CSS cannot OR a media query with a selector. A
+ * test in `tests/spectrum.test.ts` asserts the two copies are identical, which is the only
+ * thing that makes writing them twice safe.
+ */
+
+:root,
+:host {
+  /* ── Type ─────────────────────────────────────────────────────────────── */
+  --font-ui: "Instrument Sans", system-ui, -apple-system, sans-serif;
+  --font-num: "Commit Mono", ui-monospace, "Cascadia Mono", monospace;
+
+  --t-micro: 10.5px; /* eyebrows, column labels — 500, +0.06em, uppercase */
+  --t-meta: 11.5px; /* the line under a filename — 450 */
+  --t-body: 13px; /* default — 450 */
+  --t-name: 14px; /* filename — 500 */
+  --t-display: 28px; /* aggregate speed, empty states — 600, -0.02em */
+
+  /* ── Space — 4px base ─────────────────────────────────────────────────── */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+
+  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-lg: 12px;
+
+  /* ── Motion ───────────────────────────────────────────────────────────── */
+  /* Everything except the shatter moves in 120–180 ms or not at all. */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --quick: 120ms;
+  --calm: 180ms;
+
+  /* ── Data spectrum — THE ONLY COLOUR IN THE APP ───────────────────────── */
+  /* Paper. OKLCH hue 192→350, lightness .52–.59, chroma .145–.25. */
+  --w1: #038e8b; /* aqua    oklch(.585 .145 192) */
+  --w2: #088a9b; /* cyan    oklch(.580 .150 210) */
+  --w3: #0883b2; /* sky     oklch(.575 .165 233) */
+  --w4: #206ae1; /* azure   oklch(.550 .195 260) */
+  --w5: #5e47dc; /* indigo  oklch(.515 .215 283) */
+  --w6: #9024d5; /* violet  oklch(.525 .245 307) */
+  --w7: #bd0db7; /* magenta oklch(.560 .250 330) */
+  --w8: #d83593; /* rose    oklch(.605 .215 350) */
+
+  /* Azure is the resting state of the family: the hue a finished byte settles at. */
+  --data-complete: var(--w4);
+  --focus: var(--w4);
+
+  /* Attention. A 2px left edge on a row. Never a fill, never a background. */
+  --attention: #d92d2d;
+
+  /* ── Paper (light) ────────────────────────────────────────────────────── */
+  --bg: #eef0f5;
+  --surface: #ffffff;
+  --scrim: rgb(238 240 245 / 0.72);
+  --rule: #e3e7ee;
+  --rule-strong: #c6cdd9;
+  --text: #101520;
+  --text-dim: #4e5768;
+  --text-faint: #626b7a;
+  --track: #e7ebf2; /* the "not yet" region of the segment map */
+  --shadow:
+    0 1px 2px rgb(16 21 32 / 0.06), 0 12px 32px -8px rgb(16 21 32 / 0.18);
+}
+
+/* ── Ink (dark) ─────────────────────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]),
+  :host(:not([data-theme="light"])) {
+    --w1: #0edbd6;
+    --w2: #02cae3;
+    --w3: #06b6f6;
+    --w4: #5796fe;
+    --w5: #7e72ff;
+    --w6: #b458fa;
+    --w7: #ec4fe4;
+    --w8: #ff7bbf;
+
+    --attention: #ff5c5c;
+
+    --bg: #0a0c11;
+    --surface: #12161d;
+    --scrim: rgb(10 12 17 / 0.72);
+    --rule: #232833;
+    --rule-strong: #353d4d;
+    --text: #eaeef6;
+    --text-dim: #9aa5b8;
+    --text-faint: #7a8496;
+    --track: #1a1f29;
+    --shadow:
+      0 1px 2px rgb(0 0 0 / 0.5), 0 16px 40px -8px rgb(0 0 0 / 0.6);
+  }
+}
+
+/* The same block again, so an explicit choice wins in both directions — a user on a
+   light OS who picked dark, and a user on a dark OS who picked light. */
+:root[data-theme="dark"],
+:host([data-theme="dark"]) {
+  --w1: #0edbd6;
+  --w2: #02cae3;
+  --w3: #06b6f6;
+  --w4: #5796fe;
+  --w5: #7e72ff;
+  --w6: #b458fa;
+  --w7: #ec4fe4;
+  --w8: #ff7bbf;
+
+  --attention: #ff5c5c;
+
+  --bg: #0a0c11;
+  --surface: #12161d;
+  --scrim: rgb(10 12 17 / 0.72);
+  --rule: #232833;
+  --rule-strong: #353d4d;
+  --text: #eaeef6;
+  --text-dim: #9aa5b8;
+  --text-faint: #7a8496;
+  --track: #1a1f29;
+  --shadow:
+    0 1px 2px rgb(0 0 0 / 0.5), 0 16px 40px -8px rgb(0 0 0 / 0.6);
+}

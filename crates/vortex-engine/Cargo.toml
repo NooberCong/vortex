@@ -1,0 +1,50 @@
+[package]
+name = "vortex-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Vortex transfer core — probe, scheduler, writer, resume. No UI, no IPC."
+
+[dependencies]
+vortex-proto = { workspace = true }
+
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+percent-encoding = { workspace = true }
+roaring = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+md-5 = { workspace = true }
+crc32fast = { workspace = true }
+rmp-serde = { workspace = true }
+
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+    "http2",
+    "stream",
+    "system-proxy",
+    "charset",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+hostile-server = { path = "../../bench/hostile-server" }
+tempfile = "3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "charset"] }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Ioctl", "Win32_System_IO"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

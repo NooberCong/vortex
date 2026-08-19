@@ -1,0 +1,28 @@
+[package]
+name = "vortex-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The throughput harness. Every scheduler change runs this (06 §Benchmark harness)."
+
+[[bin]]
+name = "vortex-bench"
+path = "src/main.rs"
+
+[dependencies]
+vortex-engine = { workspace = true }
+vortex-proto = { workspace = true }
+hostile-server = { path = "../hostile-server" }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["full", "process"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+] }

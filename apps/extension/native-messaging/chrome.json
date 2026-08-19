@@ -1,0 +1,9 @@
+{
+  "name": "io.vortex.host",
+  "description": "Vortex download manager - bridges the extension to the local daemon.",
+  "path": "%INSTALL_DIR%\\vortex-host.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://%EXTENSION_ID%/"
+  ]
+}

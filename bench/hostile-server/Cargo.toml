@@ -1,0 +1,26 @@
+[package]
+name = "hostile-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "A server that misbehaves on demand. The correctness half of the benchmark suite (06 §Benchmark harness)."
+
+[lib]
+name = "hostile_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hostile-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "http2", "tokio"] }
+tokio = { workspace = true, features = ["full"] }
+futures = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }

@@ -1,0 +1,24 @@
+[package]
+name = "vortex-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The Vortex command line — a client of the daemon, and a headless engine harness."
+
+[[bin]]
+name = "vortex"
+path = "src/main.rs"
+
+[dependencies]
+vortex-proto = { workspace = true }
+vortex-engine = { workspace = true }
+vortex-media = { workspace = true }
+vortex-ipc = { workspace = true }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

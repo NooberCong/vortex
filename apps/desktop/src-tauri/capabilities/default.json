@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the window is allowed to ask the native side for. Everything that touches a job goes through the `send`/`watch` commands, which are ours; the plugins below are the handful of things a webview genuinely cannot do for itself.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-set-theme",
+    "core:window:allow-set-progress-bar",
+    "core:window:allow-is-maximized",
+    "core:window:allow-is-focused",
+    "core:event:default",
+    "dialog:allow-open",
+    "opener:allow-open-path",
+    "opener:allow-reveal-item-in-dir",
+    "notification:default"
+  ]
+}

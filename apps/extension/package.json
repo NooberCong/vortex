@@ -1,0 +1,27 @@
+{
+  "name": "@vortex/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vortex capture layer — a sensor and a remote control, never a downloader.",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build && wxt build -b firefox",
+    "build:store": "wxt build --mode store && wxt build -b firefox --mode store",
+    "zip": "wxt zip && wxt zip -b firefox",
+    "postinstall": "wxt prepare",
+    "check": "wxt prepare && tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vortex/proto": "*",
+    "@vortex/tokens": "*"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.11.2",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4",
+    "wxt": "^0.20.12"
+  }
+}
