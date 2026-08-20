@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { getVersion } from "@tauri-apps/api/app";
   import { open } from "@tauri-apps/plugin-dialog";
   import { bytes, PROTOCOL_VERSION } from "@vortex/proto";
   import type { ContainerPreference, Settings, Theme } from "@vortex/proto";
@@ -23,6 +24,18 @@
    * included, which is why a theme change survives a restart without this component
    * knowing where anything is stored.
    */
+
+  /**
+   * The version, asked for rather than written down again.
+   *
+   * `tauri.conf.json` is the one place it lives. A copy in this file is a copy nobody
+   * remembers on release day, which is how the About box came to claim 0.1.0 for the whole
+   * of 0.2.0.
+   */
+  let version = $state("—");
+  getVersion()
+    .then((v) => (version = v))
+    .catch(() => {});
 
   interface Props {
     onClose: () => void;
@@ -317,7 +330,7 @@
       <h3 class="micro">About</h3>
       <dl class="about meta">
         <dt>Vortex</dt>
-        <dd class="num">0.1.0</dd>
+        <dd class="num">{version}</dd>
         <dt>Protocol</dt>
         <dd class="num">{PROTOCOL_VERSION}</dd>
         <dt>Downloads</dt>
