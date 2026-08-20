@@ -654,6 +654,9 @@ pub enum Command {
     ProbeMedia { envelope: RequestEnvelope },
     Subscribe { scope: SubscriptionScope },
     List,
+    /// Takes the completed rows out of the list. Only the completed ones: a failed
+    /// download still owns a resumable `.vxpart`, and tidying is not a decision about
+    /// anyone's data.
     ClearCompleted,
     GetSettings,
     SetSettings { settings: Settings },

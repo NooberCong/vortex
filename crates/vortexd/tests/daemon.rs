@@ -360,6 +360,150 @@ async fn cancel_takes_the_row_and_the_partial_data_with_it() {
     daemon.stop().await;
 }
 
+/// Two rows can name one `.vxpart`. The path a job expects before it has run is a guess
+/// from its filename, and asking for the same link twice makes the same guess twice — so
+/// the row that leaves must check whether the bytes under that name are still someone's.
+#[tokio::test]
+async fn removing_a_duplicate_row_leaves_the_running_download_its_bytes() {
+    let server = hostile_server::spawn(SIZE, slow()).await;
+    let root = tempfile::tempdir().unwrap();
+    let downloads = root.path().join("downloads");
+    let daemon = Daemon::start(&root.path().join("data"), &downloads).await;
+    let mut client = daemon.client().await;
+
+    // Submitted first and started never: its idea of which partial it owns stays the
+    // guess, and the guess is the file the second one is about to write.
+    let twin = client
+        .submit(JobSpec {
+            start_paused: true,
+            ..JobSpec::file(envelope(server.url(), "twin.bin"))
+        })
+        .await;
+    let running = client
+        .submit(JobSpec::file(envelope(server.url(), "twin.bin")))
+        .await;
+    client
+        .send(Command::Subscribe {
+            scope: SubscriptionScope::Detail { job: running },
+        })
+        .await;
+    progress_past(&mut client, 0).await;
+
+    client
+        .send(Command::Remove {
+            job: twin,
+            delete_file: false,
+        })
+        .await;
+    client
+        .expect(harness::matching(
+            |event| matches!(event, Event::JobRemoved { job } if *job == twin),
+        ))
+        .await;
+
+    let part = downloads.join("twin.bin.vxpart");
+    assert!(
+        part.exists(),
+        "removing the twin took the running download's partial with it"
+    );
+
+    let (path, bytes) = completed(client.expect(finished(running)).await);
+    assert_eq!(bytes, SIZE);
+    assert_eq!(
+        hostile_server::sha256_hex(&std::fs::read(&path).unwrap()),
+        server.sha256
+    );
+    daemon.stop().await;
+}
+
+/// Tidying the list is not a decision about anyone's data. A failed download is terminal
+/// in the state machine but not on disk — its `.vxpart` is whole and one Retry away from
+/// finishing — and clearing it would throw that away without asking.
+#[tokio::test]
+async fn clearing_completed_downloads_leaves_the_failed_ones_alone() {
+    let server = hostile_server::spawn(SIZE, Behaviour::default()).await;
+    let root = tempfile::tempdir().unwrap();
+    let downloads = root.path().join("downloads");
+    let daemon = Daemon::start(&root.path().join("data"), &downloads).await;
+    let mut client = daemon.client().await;
+
+    let done = client
+        .submit(JobSpec::file(envelope(server.url(), "done.bin")))
+        .await;
+    let outcome = client.expect(finished(done)).await;
+    assert!(matches!(outcome, Outcome::Completed { .. }));
+
+    let missing = format!("http://{}/missing", server.addr);
+    let failed = client
+        .submit(JobSpec::file(envelope(missing, "gone.bin")))
+        .await;
+    let outcome = client.expect(finished(failed)).await;
+    assert!(matches!(outcome, Outcome::Failed { .. }));
+
+    client.send(Command::ClearCompleted).await;
+    client
+        .expect(harness::matching(
+            |event| matches!(event, Event::JobRemoved { job } if *job == done),
+        ))
+        .await;
+
+    client.send(Command::List).await;
+    let jobs = client
+        .expect(|event| match event {
+            Event::Jobs { jobs } => Some(jobs.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(jobs.len(), 1, "clearing took a row that had not finished");
+    assert_eq!(jobs[0].id, failed);
+    assert!(
+        downloads.join("done.bin").exists(),
+        "clearing the row deleted the file it produced"
+    );
+    daemon.stop().await;
+}
+
+/// Nothing in the app will ever offer an orphaned partial, so nothing but startup will
+/// ever free one. A stream's segments are the expensive case: a directory of `.ts` files
+/// with no sidecar to describe it, invisible to the list and unbounded in size.
+#[tokio::test]
+async fn startup_frees_the_partials_nothing_can_resume() {
+    let root = tempfile::tempdir().unwrap();
+    let downloads = root.path().join("downloads");
+    let nested = downloads.join("Video");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let segments = nested.join("Lecture.mp4.vxpart");
+    std::fs::create_dir_all(&segments).unwrap();
+    std::fs::write(segments.join("0001.ts"), vec![0u8; 4096]).unwrap();
+    let no_sidecar = downloads.join("half.bin.vxpart");
+    std::fs::write(&no_sidecar, vec![0u8; 4096]).unwrap();
+    let stray_sidecar = downloads.join("gone.bin.vxpart.meta");
+    std::fs::write(&stray_sidecar, vec![0u8; 64]).unwrap();
+    let landed = downloads.join("keep.bin");
+    std::fs::write(&landed, b"a download that already finished").unwrap();
+
+    let daemon = Daemon::start(&root.path().join("data"), &downloads).await;
+    let mut client = daemon.client().await;
+    client.send(Command::List).await;
+    let jobs = client
+        .expect(|event| match event {
+            Event::Jobs { jobs } => Some(jobs.clone()),
+            _ => None,
+        })
+        .await;
+    assert!(jobs.is_empty(), "an orphan came back as a row: {jobs:?}");
+
+    assert!(
+        !segments.exists(),
+        "a stream's segments outlived every row that could have used them"
+    );
+    assert!(!no_sidecar.exists(), "a partial with no block map survived");
+    assert!(!stray_sidecar.exists(), "a sidecar with no data survived");
+    assert!(landed.exists(), "the sweep took a finished file");
+    daemon.stop().await;
+}
+
 #[tokio::test]
 async fn a_client_speaking_a_different_protocol_is_told_so_plainly() {
     let root = tempfile::tempdir().unwrap();
