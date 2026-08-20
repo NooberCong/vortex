@@ -47,8 +47,33 @@ const BURST_THRESHOLD = 6;
 /** Below this, a `video/*` body is a background loop or a sound effect, not a download. */
 const DIRECT_MEDIA_FLOOR = 4 * 1024 * 1024;
 
-/** Manifests already sent for parsing, so a player that re-fetches does not re-probe. */
-const probed = new Set<string>();
+/**
+ * Manifests already sent for parsing: URL → when the probe went out, or `ANSWERED` once a
+ * ladder came back for it.
+ *
+ * A de-duplicator, so a player that re-fetches its manifest every few seconds does not
+ * re-probe — but deliberately not a *permanent* one for the failures. A probe can go
+ * nowhere for reasons that have nothing to do with the URL: the daemon was restarting, the
+ * port was dead until the next liveness alarm, the origin refused a request it had already
+ * served the browser once. Recording the URL as tried on that basis retires it for the life
+ * of the worker, and the manifest the player is still happily re-fetching is never asked
+ * about again — a silent, permanent failure produced by a transient one.
+ *
+ * Answered manifests are pinned instead of expiring, because those genuinely never need
+ * asking about twice.
+ */
+const probed = new Map<string, number>();
+
+/** A manifest that produced a ladder. Never probed again. */
+const ANSWERED = Number.POSITIVE_INFINITY;
+
+/**
+ * How long a probe that has not produced a ladder holds its URL before another may go out.
+ *
+ * Long enough that the daemon's own fetch, parse and reply have had several times over what
+ * they need, so a retry means "that went nowhere" rather than "that has not finished".
+ */
+export const RETRY_AFTER = 30_000;
 /** Segment counts per tab, reset on navigation. */
 const bursts = new Map<number, number>();
 
@@ -99,6 +124,14 @@ export function classify(url: string, type: string, observed: Observed): Signal 
   if (type !== "script" && (SEGMENT_PATH.test(url) || isSegmentMime)) return "segment";
 
   return null;
+}
+
+/** Has this URL been probed recently enough that another ask would be a duplicate? */
+function awaitingAnswer(url: string): boolean {
+  const at = probed.get(url);
+  // `ANSWERED` is `Infinity`, so the subtraction is `-Infinity` and the URL is held for
+  // good — which is the intent, spelled without a second branch to keep in step.
+  return at !== undefined && Date.now() - at < RETRY_AFTER;
 }
 
 /** Called for every response with headers. Cheap, and it has to be. */
@@ -154,16 +187,17 @@ export async function probePage(pageUrl: string, tabId: number): Promise<void> {
 
 /** Asks the daemon what is in a manifest. */
 async function probe(url: string, tabId: number): Promise<void> {
-  if (probed.has(url)) return;
+  if (awaitingAnswer(url)) return;
   const config = await settings.current();
   if (!config.enableCapture) return;
 
   const tab = await describeTab(tabId);
   if (isDenied(tab.pageUrl) || settings.optedOut(config, tab.pageUrl)) return;
 
-  probed.add(url);
-  // The set is a de-duplicator, not a cache. A player that re-mints a manifest URL every
-  // few minutes would otherwise grow it without bound for the life of the worker.
+  probed.set(url, Date.now());
+  // A hard ceiling, because a player that re-mints a manifest URL every few minutes would
+  // otherwise grow the map without bound for the life of the worker. Clearing wholesale
+  // loses the `ANSWERED` marks too, which costs one repeat probe each and nothing else.
   if (probed.size > 500) probed.clear();
 
   const envelope = await envelopeFor(url, tabId, tab);
@@ -192,6 +226,10 @@ async function envelopeFor(
  */
 async function deliver(tabId: number, candidates: MediaCandidate[]): Promise<void> {
   if (candidates.length === 0) return;
+
+  // This manifest is answered, and an answered manifest is never worth asking about again
+  // — which is what keeps `RETRY_AFTER` from re-probing the live streams that are working.
+  for (const candidate of candidates) probed.set(candidate.manifestUrl, ANSWERED);
 
   const key = candidatesKey(tabId);
   const stored = ((await browser.storage.session.get(key))[key] ?? []) as MediaCandidate[];

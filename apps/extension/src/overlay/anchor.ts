@@ -92,6 +92,58 @@ export function playersOnPage(): Player[] {
   });
 }
 
+/**
+ * The frames big enough to be holding the player this page is about.
+ *
+ * A cross-origin `<iframe>` is where a very large share of the web's video actually lives,
+ * and from up here its `<video>` is unreachable: `contentDocument` is `null` across
+ * origins, so `playersOnPage` returns an empty list on a page that is obviously playing
+ * something. The badge used to fall back to a pill in the corner of the viewport, which is
+ * both further from the video than it needs to be and, on a page with no `<video>` at all,
+ * the only thing on offer.
+ *
+ * The frame's *own* box is readable, though, and it is exactly where the player is. So the
+ * element is used as a stand-in for the video inside it: the badge lands in the player's
+ * top-right corner, the same corner it would occupy if the video were in this document,
+ * and nothing has to be read out of the frame to do it.
+ *
+ * The same size and paint rules as a player, because they are guarding against the same
+ * thing — a page carries dozens of frames and almost all of them are 1×1 tracking pixels,
+ * consent iframes and hidden prefetch documents.
+ */
+export function playerFrames(): HTMLIFrameElement[] {
+  return [...document.querySelectorAll("iframe")].filter((frame) => {
+    const rect = frame.getBoundingClientRect();
+    return (
+      rect.width >= MIN_WIDTH &&
+      rect.height >= MIN_HEIGHT &&
+      painted(look(frame)) &&
+      onPage(rect)
+    );
+  });
+}
+
+/**
+ * The frame most likely to be the feature, which is the biggest one.
+ *
+ * A page with a player embed and three advert iframes has one frame several times the area
+ * of the others. This is the same "biggest wins" guess `pair` falls back on for players,
+ * and it is wrong in the same rare way: on a page whose advert is larger than its video.
+ */
+export function largestFrame(frames: HTMLIFrameElement[]): HTMLIFrameElement | null {
+  let winner: HTMLIFrameElement | null = null;
+  let area = 0;
+  for (const frame of frames) {
+    const rect = frame.getBoundingClientRect();
+    const size = rect.width * rect.height;
+    if (size > area) {
+      area = size;
+      winner = frame;
+    }
+  }
+  return winner;
+}
+
 /** The players worth putting a badge on. */
 export function usablePlayers(players: Player[]): Player[] {
   return players.filter(

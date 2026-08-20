@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { Event, JobId, JobState, JobView, SummaryFrame } from "@vortex/proto";
 
-import { isActive, isDone, needsAttention, queue } from "$lib/store.svelte";
+import { isActive, isDone, needsAttention, queue, reveal } from "$lib/store.svelte";
 
 /**
  * The window's model of the queue.
@@ -224,5 +224,89 @@ describe("the aggregate", () => {
   it("has no progress to report when nothing measurable is running", () => {
     feed({ event: "jobs", jobs: [view({ state: { kind: "completed" } })] });
     expect(queue.progress).toBeNull();
+  });
+
+  it("counts probing and muxing as working, because the user is waiting on both", () => {
+    feed({
+      event: "jobs",
+      jobs: [
+        view({ id: 1 as JobId, state: { kind: "probing" } }),
+        view({ id: 2 as JobId, state: { kind: "downloading" } }),
+        view({ id: 3 as JobId, state: { kind: "muxing" } }),
+      ],
+    });
+    expect(queue.working).toBe(3);
+    // None of them is a download in flight; only one is.
+    expect(queue.running).toBe(1);
+  });
+
+  it("does not call a queue standing still a working one", () => {
+    // Each of these is "active" in the sidebar's sense — unfinished, not queued — and
+    // nothing is happening to any of them. A taskbar that animates here is a lie.
+    feed({
+      event: "jobs",
+      jobs: [
+        view({ id: 1 as JobId, state: { kind: "paused" } }),
+        view({ id: 2 as JobId, state: { kind: "stalled", reason: "no route to host" } }),
+        view({ id: 3 as JobId, state: { kind: "queued" } }),
+      ],
+    });
+    expect(queue.working).toBe(0);
+  });
+});
+
+describe("bringing one job into view", () => {
+  it("moves the filter to wherever the job actually is", async () => {
+    // The click on a "download finished" notification, with the list on its default
+    // "active" filter. Selecting the row without this is a cursor on something that is not
+    // on screen and never will be: a window that looks like it ignored the click.
+    feed({
+      event: "jobs",
+      jobs: [
+        view({ id: 1 as JobId }),
+        view({ id: 2 as JobId, state: { kind: "completed" } }),
+      ],
+    });
+    expect(queue.visible.map((job) => job.id)).toEqual([1]);
+
+    await reveal(2 as JobId);
+    expect(queue.visible.map((job) => job.id)).toEqual([2]);
+    expect(queue.selected).toBe(2);
+    expect(queue.expanded, "the row opens, because that is what was clicked").toBe(2);
+  });
+
+  it("finds a failed job too, which is the half of `done` nobody filters for", async () => {
+    feed({
+      event: "jobs",
+      jobs: [view({ id: 3 as JobId, state: { kind: "failed", error: "The server hung up." } })],
+    });
+    await reveal(3 as JobId);
+    expect(queue.visible.map((job) => job.id)).toEqual([3]);
+  });
+
+  it("clears a search that was hiding the job", async () => {
+    feed({ event: "jobs", jobs: [view({ id: 4 as JobId, state: { kind: "completed" } })] });
+    queue.search = "something else";
+    await reveal(4 as JobId);
+    expect(queue.search).toBe("");
+    expect(queue.visible.map((job) => job.id)).toEqual([4]);
+  });
+
+  it("leaves a filter alone when the job is already under it", async () => {
+    // Somebody mid-way through narrowing the list did not ask for it to be reset, and a
+    // notification about a job they can already see is not a reason to.
+    feed({ event: "jobs", jobs: [view({ id: 5 as JobId, category: "Video" })] });
+    queue.filter = { by: "category", category: "Video" };
+    await reveal(5 as JobId);
+    expect(queue.filter).toEqual({ by: "category", category: "Video" });
+    expect(queue.selected).toBe(5);
+  });
+
+  it("says nothing about a job that is no longer in the list", async () => {
+    // The notification outlives the row: `Clear completed` while a toast is on screen.
+    feed({ event: "jobs", jobs: [view({ id: 6 as JobId })] });
+    await reveal(99 as JobId);
+    expect(queue.selected).toBeNull();
+    expect(queue.expanded).toBeNull();
   });
 });

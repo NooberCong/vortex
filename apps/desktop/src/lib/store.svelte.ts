@@ -65,6 +65,9 @@ export function isActive(state: JobState): boolean {
   return !isDone(state) && state.kind !== "queued";
 }
 
+/** The states in which the app is doing something on the user's behalf. See `Queue.working`. */
+const WORKING = new Set<JobState["kind"]>(["probing", "downloading", "muxing"]);
+
 export function isDone(state: JobState): boolean {
   return state.kind === "completed" || state.kind === "failed";
 }
@@ -94,6 +97,12 @@ class Queue {
   search = $state("");
   selected = $state<JobId | null>(null);
   expanded = $state<JobId | null>(null);
+  /**
+   * The job the Remove sheet is asking about, if it is open. It lives here for the same
+   * reason `expanded` does: two places ask to remove a job — the row's × and the Delete
+   * key — and they must open the same one sheet rather than each own a copy.
+   */
+  removing = $state<JobId | null>(null);
 
   #index = new Map<JobId, Job>();
 
@@ -150,6 +159,20 @@ class Queue {
 
   /** Everything that is moving, for the tray tooltip and the taskbar. */
   running = $derived(this.jobs.filter((job) => job.view.state.kind === "downloading").length);
+
+  /**
+   * Everything genuinely working, as opposed to merely unfinished — the question the
+   * taskbar asks.
+   *
+   * Wider than `running`, because a job that is probing or muxing is doing something the
+   * user is waiting on even though no bytes are landing. Narrower than the sidebar's
+   * "active", because paused, stalled and needs-an-answer jobs are standing still, and a
+   * taskbar that animates for a queue nothing is happening to is a lie the shell tells on
+   * the app's behalf.
+   */
+  working = $derived(
+    this.jobs.filter((job) => WORKING.has(job.view.state.kind)).length,
+  );
 
   /**
    * How far along the whole queue is, for the taskbar progress bar. Jobs of unknown size
@@ -242,6 +265,9 @@ class Queue {
     if (!this.#index.delete(id)) return;
     if (this.selected === id) this.selected = null;
     if (this.expanded === id) this.expanded = null;
+    // The CLI, or a second window, can remove the job this sheet is asking about. Asking
+    // about a row that is already gone is a question with nothing behind it.
+    if (this.removing === id) this.removing = null;
     this.jobs = this.#sorted();
   }
 
@@ -270,4 +296,29 @@ export async function expand(id: JobId | null): Promise<void> {
   const job = next === null ? null : queue.get(next);
   if (job) job.detail = null;
   await daemon.watch(next);
+}
+
+/**
+ * Brings one job into view — the notification's click, and the only thing that reaches
+ * into the list from outside it.
+ *
+ * The filter is half the answer. A finished job is not in the default "active" view, so
+ * selecting it there would move a cursor onto a row that is not on screen and never will
+ * be: the user clicks a toast about a download and gets a window that looks unchanged.
+ * The filter only moves when it has to, because a user who was mid-way through narrowing
+ * the list did not ask for it to be reset.
+ */
+export async function reveal(id: JobId): Promise<void> {
+  const job = queue.get(id);
+  if (!job) return;
+  if (!queue.visible.some((row) => row.id === id)) {
+    const state = job.view.state;
+    queue.search = "";
+    queue.filter = {
+      by: "state",
+      state: isDone(state) ? "done" : state.kind === "queued" ? "queued" : "active",
+    };
+  }
+  queue.selected = id;
+  if (queue.expanded !== id) await expand(id);
 }

@@ -147,7 +147,7 @@
         <Icon name={action === "pause" ? "pause" : "play"} />
       </button>
     {/if}
-    <button class="button quiet icon" title="Remove" onclick={() => act.remove(job.id)}>
+    <button class="button quiet icon" title="Remove" onclick={() => act.requestRemove(job)}>
       <Icon name="close" />
     </button>
   </div>

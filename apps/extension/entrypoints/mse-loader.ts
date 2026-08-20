@@ -1,7 +1,6 @@
-import { browser } from "wxt/browser";
 import { injectScript } from "wxt/utils/inject-script";
 
-import type { MseReport, MseSignal } from "@/src/messages";
+import { post, type MseReport, type MseSignal } from "@/src/messages";
 
 /**
  * The isolated-world half of channel 4.
@@ -37,7 +36,7 @@ export default defineUnlistedScript(async () => {
     };
     // Only worth relaying once a buffer has actually been appended to. A page that
     // constructed a `MediaSource` and never used it is not playing anything.
-    if (report.signal.playing) void browser.runtime.sendMessage(report).catch(() => {});
+    if (report.signal.playing) void post(report);
   });
 
   await injectScript("/mse-hook.js", { keepInDom: false });

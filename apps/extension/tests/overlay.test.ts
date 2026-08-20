@@ -353,7 +353,7 @@ describe("choosing a resolution", () => {
 
     const node = open(overlay);
     node.querySelector<HTMLButtonElement>(".rung")!.click();
-    expect(node.querySelector(".badge")?.textContent).toContain("Added");
+    expect(node.querySelector(".badge")?.textContent).toContain("Download queued");
     overlay.destroy();
   });
 
@@ -480,5 +480,83 @@ describe("the overlay's numbers", () => {
   it("labels a rung by height, and by bitrate only when there is no height", () => {
     expect(quality({ height: 1080, bandwidth: 4_000_000 })).toBe("1080p");
     expect(quality({ height: null, bandwidth: 128_000 })).toBe("128 kbps");
+  });
+});
+
+/** An `<iframe>` at a stated rect, since happy-dom measures everything as zero. */
+function frameOnPage(width = 960, height = 540): HTMLIFrameElement {
+  const frame = document.createElement("iframe");
+  // No `src`. The frame is found by its box, never by where it points, and happy-dom
+  // would go and fetch a real one.
+  frame.getBoundingClientRect = () =>
+    ({
+      x: 40,
+      y: 80,
+      left: 40,
+      top: 80,
+      width,
+      height,
+      right: 40 + width,
+      bottom: 80 + height,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  document.body.append(frame);
+  return frame;
+}
+
+/**
+ * The fallback, when nothing in this document can be paired.
+ *
+ * Both of these were silent: the badge was constructed, mounted and positioned, and could
+ * not be seen. Nothing threw, nothing logged, and the only symptom was a page that had
+ * obviously captured a stream and obviously had no button on it.
+ */
+describe("a stream with no player of its own in the document", () => {
+  it("pins the badge to the frame the player is in", () => {
+    // A cross-origin embed. `playersOnPage` finds nothing — `contentDocument` is null
+    // across origins — but the frame's own box is readable, and it is exactly where the
+    // player is. The badge belongs in its corner, not in the corner of the window.
+    const frame = frameOnPage();
+    const overlay = new Overlay({ download: vi.fn(), dismiss: vi.fn() });
+    overlay.show([ladder()]);
+    overlay.__advanceForTests(SETTLED);
+
+    const [node] = overlay.__nodesForTests();
+    expect(node?.className, "anchored, not the corner pill").toBe("spot");
+    expect(node?.dataset.show).toBe("true");
+
+    // Placed against the frame's rect, at its top-right corner.
+    const rect = frame.getBoundingClientRect();
+    const at = drawnAt(node!);
+    expect(at).not.toBeNull();
+    expect(at!.x).toBeLessThanOrEqual(rect.right);
+    expect(at!.y).toBeGreaterThanOrEqual(rect.top);
+  });
+
+  it("shows the corner pill when there is not even a frame to point at", () => {
+    // An audio-only manifest, or a player this code cannot see by any route. The pill is
+    // the last thing on offer, and it used to be mounted permanently invisible: `place`
+    // returned before it could set `data-show`, so the node kept the `"false"` it was
+    // spawned with and `.spot[data-show="false"]` is `opacity: 0`.
+    const overlay = new Overlay({ download: vi.fn(), dismiss: vi.fn() });
+    overlay.show([ladder()]);
+    overlay.__advanceForTests(SETTLED);
+
+    const [node] = overlay.__nodesForTests();
+    expect(node?.className).toBe("spot pill-spot");
+    expect(node?.dataset.show, "a pill that hides can never be brought back").toBe("true");
+  });
+
+  it("keeps the pill up rather than hiding it after the intro", () => {
+    // A badge hides on unhover because the pointer returning to its player brings it back.
+    // A pill has no player to return to, so the same rule would simply delete it.
+    const overlay = new Overlay({ download: vi.fn(), dismiss: vi.fn() });
+    overlay.show([ladder()]);
+    overlay.__advanceForTests(SETTLED);
+    expect(overlay.__nodesForTests()[0]?.dataset.show).toBe("true");
+
+    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 60_000);
+    overlay.__advanceForTests(SETTLED);
+    expect(overlay.__nodesForTests()[0]?.dataset.show).toBe("true");
   });
 });

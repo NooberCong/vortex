@@ -164,6 +164,14 @@ pub async fn track(
                     tracing::debug!(index, "the speculative tail ends here");
                     end = end.min(index);
                     ready.insert(index, Vec::new());
+                } else if track.contiguous {
+                    // One file cut into byte ranges. Skipping a block does not make the
+                    // file shorter, it makes it unopenable — so everything contiguous
+                    // already written stays on disk and the run stops for a retry, which
+                    // picks up from exactly this block.
+                    tracing::warn!(index, "a block is unavailable: {reason}");
+                    state.checkpoint(stats, true).map_err(Interruption::Local)?;
+                    return Err(Interruption::Stopped);
                 } else {
                     // The gap is recorded, not fatal. The count is reported at the end:
                     // "3 of 1,800 segments unavailable" beats a discarded download.

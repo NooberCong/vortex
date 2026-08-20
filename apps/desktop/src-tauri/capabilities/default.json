@@ -16,7 +16,11 @@
     "core:window:allow-is-focused",
     "core:event:default",
     "dialog:allow-open",
-    "opener:allow-open-path",
+    {
+      "identifier": "opener:allow-open-path",
+      "description": "Enabling the command is not enough: `open_path` ends in `is_path_allowed`, which is `fs_scope.is_allowed(path) && self.allowed.iter().any(..)`, so an empty allow-list denies every path and the bare `opener:allow-open-path` permission is documented as being 'without any pre-configured scope'. Without this block the Open button could never once have worked. The glob is unbounded because the destination is the user's to choose and routinely is not under the home directory - large video goes on the spare volume - so any enumeration of `$DOWNLOAD`, `$VIDEO` and friends would be a list of the places we guessed they would keep their files. What actually bounds this is the caller: `open()` is reachable from one place, with `view.destPath`, which is the destination the daemon recorded for a job it wrote itself.",
+      "allow": [{ "path": "**" }]
+    },
     "opener:allow-reveal-item-in-dir",
     "notification:default"
   ]

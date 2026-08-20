@@ -29,7 +29,16 @@
 import type { MediaCandidate, MediaSelection, MediaVariant } from "@vortex/proto";
 import css from "./style.css?inline";
 import tokens from "@vortex/tokens/tokens.css?inline";
-import { pair, playersOnPage, usablePlayers, type Pairing, type Player } from "./anchor";
+import {
+  largestFrame,
+  pair,
+  playerFrames,
+  playersOnPage,
+  usablePlayers,
+  type Pairing,
+  type Player,
+} from "./anchor";
+import { best, carry, selectionOf, type State } from "./select";
 import { codec, duration, estimate, quality } from "./format";
 import { clippedBox, clippersOf, covered, stickyHeader, type Box } from "./geometry";
 
@@ -46,22 +55,29 @@ const MARGIN = 8;
 /** Frames between re-pairings, for a player that arrives after its manifest did. */
 const REPAIR_EVERY = 30;
 
+// Re-exported so `@/src/overlay` stays the one name the rest of the extension and its
+// tests know. Where they live is a bundling decision, not an API change.
+export { best, carry, chooseVariant, selectionOf } from "./select";
+export type { State } from "./select";
+
 export interface Hooks {
   download(selection: MediaSelection, title: string): void;
   dismiss(origin: string): void;
 }
 
-export interface State {
-  candidate: MediaCandidate;
-  /** Index into `candidate.variants`, or `-1` for the audio-only rung. */
-  variant: number;
-  subtitles: boolean;
-  expanded: boolean;
-}
 
-/** One badge: a ladder, and the player it is pinned to. `video` is null for the pill. */
+/** One badge: a ladder, and the thing it is pinned to. */
 interface Spot {
-  video: HTMLVideoElement | null;
+  /**
+   * What the badge sits on: the `<video>` it downloads, or the `<iframe>` standing in for
+   * a player this document cannot reach into (`anchor.ts`). `null` only for the corner
+   * pill, where there is nothing on the page to sit on at all.
+   *
+   * Deliberately an `Element`. Everything placement does to it — its rect, its clippers,
+   * the hit test over it — was already written against `Element`, so a frame works here
+   * exactly as a player does and nothing below had to learn a second case.
+   */
+  anchor: Element | null;
   state: State;
   node: HTMLElement;
   /** When this badge appeared, so a new one can introduce itself. */
@@ -199,7 +215,7 @@ export class Overlay {
   /** One badge per paired player, reusing the badge that is already on it. */
   private anchored(pairs: Pairing[]): void {
     const next = pairs.map(({ player, candidate }) => {
-      const existing = this.spots.find((spot) => spot.video === player.video);
+      const existing = this.spots.find((spot) => spot.anchor === player.video);
       if (existing) {
         existing.state = carry(existing.state, candidate, playedHeight(player));
         // The page has just changed enough to be re-paired, so whatever clipped this
@@ -223,27 +239,33 @@ export class Overlay {
       this.settle([]);
       return;
     }
-    const existing = this.spots.find((spot) => spot.video === null);
+    // Nothing in this document could be paired, which on the modern web usually means the
+    // player is in a frame rather than that there is no player. The frame's own box is
+    // readable from here even when its contents are not, so the badge goes in the player's
+    // top-right corner as it always would; the viewport pill is what is left when there is
+    // not even a frame to point at — an audio-only manifest, say.
+    const anchor: Element | null = largestFrame(playerFrames());
+    const existing = this.spots.find((spot) => spot.anchor === anchor);
     if (existing) {
       existing.state = carry(existing.state, candidate, playbackHeight());
       this.settle([existing]);
       return;
     }
-    this.settle([this.spawn(null, carry(null, candidate, playbackHeight()))]);
+    this.settle([this.spawn(anchor, carry(null, candidate, playbackHeight()))]);
   }
 
-  private spawn(video: HTMLVideoElement | null, state: State): Spot {
-    const node = el("div", video ? "spot" : "spot pill-spot");
+  private spawn(anchor: Element | null, state: State): Spot {
+    const node = el("div", anchor ? "spot" : "spot pill-spot");
     node.dataset.show = "false";
     return {
-      video,
+      anchor,
       state,
       node,
       born: now(),
       queued: false,
       x: NaN,
       y: NaN,
-      clippers: video ? clippersOf(video) : [],
+      clippers: anchor ? clippersOf(anchor) : [],
       buried: false,
     };
   }
@@ -265,13 +287,13 @@ export class Overlay {
   }
 
   private badge(spot: Spot): HTMLElement {
-    const button = el("button", spot.video ? "badge" : "badge pill");
+    const button = el("button", spot.anchor ? "badge" : "badge pill");
     button.type = "button";
     button.setAttribute("aria-expanded", "false");
     button.setAttribute("aria-label", "Download this video");
     if (spot.queued) {
       button.classList.add("queued");
-      button.append(text("span", "arrow", "✓"), text("span", "label", "Added to Vortex"));
+      button.append(text("span", "arrow", "✓"), text("span", "label", "Download queued"));
       return button;
     }
     button.append(
@@ -476,7 +498,7 @@ export class Overlay {
   private measure(): void {
     this.header = stickyHeader(this.host);
     for (const spot of this.spots) {
-      if (spot.video?.isConnected) spot.clippers = clippersOf(spot.video);
+      if (spot.anchor?.isConnected) spot.clippers = clippersOf(spot.anchor);
     }
   }
 
@@ -485,7 +507,7 @@ export class Overlay {
     const box = spot.node.firstElementChild as HTMLElement | null;
     // An open panel is not something to second-guess: the user opened it, it is on top by
     // construction, and it is wide enough that its centre is nowhere near where it hangs.
-    if (!spot.video || !box || spot.state.expanded || !Number.isFinite(spot.x)) {
+    if (!spot.anchor || !box || spot.state.expanded || !Number.isFinite(spot.x)) {
       spot.buried = false;
       return;
     }
@@ -494,22 +516,45 @@ export class Overlay {
     spot.buried = covered(
       spot.x - box.offsetWidth / 2,
       spot.y + box.offsetHeight / 2,
-      spot.video,
+      spot.anchor,
       this.host,
     );
   }
 
   private place(spot: Spot): void {
-    if (!spot.video) return;
     const box = spot.node.firstElementChild as HTMLElement | null;
-    if (!spot.video.isConnected || !box) {
+    if (!box) {
+      spot.node.dataset.show = "false";
+      return;
+    }
+
+    /*
+     * The corner pill has nothing to follow.
+     *
+     * The stylesheet parks it in the bottom-right of the viewport and it stays there, so
+     * there is no rect to measure and no transform to write — but it still has to be told
+     * it may be seen. It used to be told nothing: this function returned here, `data-show`
+     * kept the `"false"` it was spawned with, and `.spot[data-show="false"]` is
+     * `opacity: 0`. The fallback badge was mounted, positioned, and permanently invisible,
+     * on exactly the pages that had nothing else to offer.
+     *
+     * It is shown unconditionally rather than on hover, because the intro-then-quiet rule
+     * below is a trade a pill cannot make: a badge that hides comes back when the pointer
+     * returns to its player, and a pill has no player to return to.
+     */
+    if (!spot.anchor) {
+      spot.node.dataset.show = "true";
+      return;
+    }
+
+    if (!spot.anchor.isConnected) {
       spot.node.dataset.show = "false";
       return;
     }
     // The player's rect, cut down to the part its own page actually shows: a player in a
     // carousel or a collapsing card extends well past the box that clips it, and the
     // corner a badge is pinned to is routinely the corner that is gone.
-    const rect = clippedBox(spot.video, spot.clippers);
+    const rect = clippedBox(spot.anchor, spot.clippers);
     // `offsetWidth`, not a rect: the panel animates in with a scale, and a measurement
     // that included the transform would feed its own easing back into the position.
     const width = box.offsetWidth;
@@ -634,48 +679,7 @@ export function rungLabel(state: State): string {
   return variant ? quality(variant) : "Audio";
 }
 
-/**
- * Which candidate the fallback pill speaks for when a page carries several.
- *
- * Longest wins. An ad break, a trailer and a preview roll are all manifests on the same
- * page as the feature, and they are all shorter than it. Where nothing states a duration,
- * the first confirmed stream is as good a guess as any.
- */
-export function best(candidates: MediaCandidate[]): MediaCandidate | null {
-  const usable = candidates.filter((c) => c.variants.length > 0 && !c.live);
-  if (usable.length === 0) return null;
-  return usable.reduce((winner, candidate) =>
-    (candidate.durationSecs ?? 0) > (winner.durationSecs ?? 0) ? candidate : winner,
-  );
-}
 
-/**
- * The rung to mark, and the one the badge names.
- *
- * The player's own height wins when there is a video actually playing, because that is
- * literally "the variant matching the user's current playback resolution". Otherwise the
- * daemon's `defaultVariant`, which it derived from the user's saved preference. Falling
- * back to the maximum is exactly the behaviour this is written to avoid.
- */
-export function chooseVariant(candidate: MediaCandidate, height: number | null): number {
-  if (height && height > 0) {
-    let best = 0;
-    let closest = Number.POSITIVE_INFINITY;
-    candidate.variants.forEach((variant, index) => {
-      const distance = Math.abs((variant.height ?? 0) - height);
-      if (distance < closest) {
-        closest = distance;
-        best = index;
-      }
-    });
-    return best;
-  }
-  const preferred = candidate.defaultVariant;
-  if (preferred !== null && preferred !== undefined && candidate.variants[preferred]) {
-    return preferred;
-  }
-  return 0;
-}
 
 /** The height of the largest video actually playing on the page, if any. */
 export function playbackHeight(): number | null {
@@ -687,49 +691,8 @@ export function playbackHeight(): number | null {
   return best;
 }
 
-/** What the chosen rung submits. */
-export function selectionOf(state: State): MediaSelection {
-  const { candidate, variant, subtitles } = state;
-  const audioOnly = variant < 0;
-  return {
-    manifestUrl: candidate.manifestUrl,
-    kind: candidate.kind,
-    title: candidate.title,
-    // An audio-only job is the same job with no video track; the daemon reads an empty
-    // variant id as "the audio group only".
-    variantId: audioOnly ? "" : (candidate.variants[variant]?.id ?? ""),
-    audioId: pickAudio(candidate),
-    subtitleIds: subtitles && !audioOnly ? candidate.subtitles.map((track) => track.id) : [],
-    container: "Auto",
-  };
-}
 
-/**
- * Carries what the user has already said across a re-render.
- *
- * A live ladder can gain and lose rungs between updates, so a kept selection is clamped
- * rather than trusted. A *different* manifest is a different video: nothing carries.
- */
-export function carry(
-  previous: State | null,
-  candidate: MediaCandidate,
-  height: number | null,
-): State {
-  const same = previous !== null && previous.candidate.id === candidate.id;
-  return {
-    candidate,
-    variant: same
-      ? Math.min(previous.variant, candidate.variants.length - 1)
-      : chooseVariant(candidate, height),
-    subtitles: previous?.subtitles ?? candidate.subtitles.length > 0,
-    expanded: same ? previous.expanded : false,
-  };
-}
 
-function pickAudio(candidate: MediaCandidate): string | null {
-  if (candidate.audio.length === 0) return null;
-  return (candidate.audio.find((track) => track.default) ?? candidate.audio[0]!).id;
-}
 
 /** What this player is actually showing, which is what the marked rung should match. */
 function playedHeight(player: Player): number | null {

@@ -509,6 +509,139 @@ async fn subtitles_are_stitched_and_embedded_as_a_soft_track() {
     );
 }
 
+/// The shape an extractor hands back: no manifest, two finished URLs, and a page URL in
+/// `manifest_url` that is not a stream and must never be fetched as one.
+///
+/// Before the progressive branch existed this ran `read` over the page and failed with
+/// "that link isn't a stream Vortex can read" — the exact sentence a working YouTube
+/// download used to end in.
+#[tokio::test]
+async fn an_extracted_pair_of_files_becomes_one_playable_file() {
+    let source = tempfile::tempdir().unwrap();
+    if !harness::build_progressive(source.path()) {
+        eprintln!("no ffmpeg on this machine; skipping");
+        return;
+    }
+    let origin = Origin::serve(source.path()).await;
+    let dest = tempfile::tempdir().unwrap();
+
+    let chosen = MediaSelection {
+        // The page, exactly as `ytdlp::parse` sets it. Fetching this yields a document.
+        manifest_url: "https://example.com/watch?v=colourbars".into(),
+        kind: MediaKind::Progressive,
+        title: "Colour Bars".into(),
+        variant_id: origin.url("video.mp4"),
+        audio_id: Some(origin.url("audio.m4a")),
+        subtitle_ids: Vec::new(),
+        container: ContainerPreference::Auto,
+    };
+
+    let (events, incoming) = mpsc::channel(64);
+    let (_control, control_rx) = job::control();
+    let watcher = drain(incoming);
+    let done = vortex_media::job::transfer(
+        engine(),
+        MediaSpec {
+            envelope: RequestEnvelope::new("https://example.com/watch?v=colourbars"),
+            selection: chosen,
+            dest_dir: dest.path().to_path_buf(),
+            filename: None,
+            max_connections: 8,
+            container: ContainerPreference::Auto,
+        },
+        events,
+        control_rx,
+    )
+    .await
+    .expect("an extracted ladder is a download like any other");
+    watcher.await.unwrap();
+
+    assert_eq!(
+        done.path.file_name().unwrap().to_string_lossy(),
+        "Colour Bars.mp4"
+    );
+    let probe = harness::ffprobe(&done.path);
+    assert!(probe.has("video"), "{:?}", probe.streams);
+    assert!(
+        probe.has("audio"),
+        "the separate audio file was dropped: {:?}",
+        probe.streams
+    );
+    assert!(
+        (probe.duration - 6.0).abs() < 1.0,
+        "expected about six seconds, got {}",
+        probe.duration
+    );
+    assert!(
+        !vortex_media::job::work_dir(&done.path).exists(),
+        "the blocks outlived a successful mux"
+    );
+}
+
+/// A progressive track is one file cut into ranges, so a lost block is not a gap the way a
+/// lost HLS segment is — it is a hole in the middle of an MP4. The run stops, keeps what
+/// is contiguous, and the daemon retries; a file with a hole in it must never be handed
+/// over as finished.
+#[tokio::test]
+async fn a_lost_block_stops_a_progressive_run_rather_than_punching_a_hole_in_the_file() {
+    let source = tempfile::tempdir().unwrap();
+    if !harness::build_progressive(source.path()) {
+        eprintln!("no ffmpeg on this machine; skipping");
+        return;
+    }
+    let origin = Origin::serve(source.path()).await;
+    let dest = tempfile::tempdir().unwrap();
+
+    // 410 is `Class::Fatal`: its retries are spent immediately, which is what a gap is
+    // made of. The probe is request one and must succeed — the hole has to appear during
+    // the transfer, not before it.
+    origin.fail_from("video.mp4", 2, 410);
+
+    let chosen = MediaSelection {
+        manifest_url: "https://example.com/watch?v=colourbars".into(),
+        kind: MediaKind::Progressive,
+        title: "Colour Bars".into(),
+        variant_id: origin.url("video.mp4"),
+        audio_id: None,
+        subtitle_ids: Vec::new(),
+        container: ContainerPreference::Auto,
+    };
+
+    let (events, incoming) = mpsc::channel(64);
+    let (_control, control_rx) = job::control();
+    let watcher = drain(incoming);
+    let outcome = vortex_media::job::transfer(
+        engine(),
+        MediaSpec {
+            envelope: RequestEnvelope::new("https://example.com/watch?v=colourbars"),
+            selection: chosen,
+            dest_dir: dest.path().to_path_buf(),
+            filename: None,
+            max_connections: 4,
+            container: ContainerPreference::Auto,
+        },
+        events,
+        control_rx,
+    )
+    .await;
+    watcher.await.unwrap();
+
+    assert!(
+        matches!(outcome, Err(Interrupted::Stopped)),
+        "a missing block must stall the job, not finish it: {outcome:?}"
+    );
+    let finished: Vec<String> = std::fs::read_dir(dest.path())
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".mp4"))
+        .collect();
+    assert!(
+        finished.is_empty(),
+        "a file with a hole in it was handed over as finished: {finished:?}"
+    );
+}
+
 #[test]
 fn stitched_webvtt_puts_every_cue_where_the_timestamp_map_says() {
     // Three one-and-a-half-second cues, each in its own segment, each declaring a local

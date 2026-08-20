@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Orphans, SETTLE } from "@/src/orphan";
+import { hasLoadedPlayer, Orphans, SETTLE } from "@/src/orphan";
 
 /** A `<video>` with a stated box and, unless the test says otherwise, a loaded stream. */
 function playerOnPage(
@@ -207,5 +207,48 @@ describe("offering a page to the extractor when nothing on the wire explained it
     new Orphans(ask);
     vi.advanceTimersByTime(SETTLE * 10);
     expect(ask).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The predicate both halves of channel 5 ask.
+ *
+ * The top document runs it against itself; the frame reporter runs it inside a subframe,
+ * where the top document cannot see the answer at all (`entrypoints/frame.content.ts`). It is
+ * exported so there is exactly one of it — two definitions of "a real player" is how the
+ * badge and the extractor end up disagreeing about what is on the page.
+ */
+describe("whether this document has a real player in it", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("says yes to a loaded player, wherever the document is", () => {
+    // Deliberately not an `https://` page: a subframe's own URL is no part of this
+    // question. Whether the *page* is something the daemon can fetch is decided by the
+    // background, from the tab, and a frame does not get to answer it either way.
+    at("about:blank");
+    playerOnPage();
+    expect(hasLoadedPlayer()).toBe(true);
+  });
+
+  it("says no to the things that are not players", () => {
+    at("https://example.com/watch");
+    expect(hasLoadedPlayer(), "an empty document").toBe(false);
+
+    const thumbnail = playerOnPage({ width: 120, height: 68 });
+    expect(hasLoadedPlayer(), "a thumbnail").toBe(false);
+    thumbnail.remove();
+
+    const empty = playerOnPage({ readyState: 0 });
+    expect(hasLoadedPlayer(), "a player with no source").toBe(false);
+    empty.remove();
+
+    const live = playerOnPage({ duration: Number.POSITIVE_INFINITY });
+    expect(hasLoadedPlayer(), "a live stream").toBe(false);
+    live.remove();
+
+    playerOnPage({ width: 1920, height: 400, objectFit: "cover", videoSize: [1920, 1080] });
+    expect(hasLoadedPlayer(), "a decorative background loop").toBe(false);
   });
 });

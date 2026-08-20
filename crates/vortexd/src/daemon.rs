@@ -1041,23 +1041,113 @@ impl Daemon {
 /// A DRM refusal is final and never falls through to the extractor: yt-dlp cannot download
 /// protected video either, and pretending otherwise would turn a clear product boundary
 /// into a confusing second failure (04 §DRM).
+///
+/// **Every path out of here logs**, and that is not decoration. A probe that finds nothing
+/// emits no event, raises no badge and produces no error anyone ever sees: the extension
+/// asks, the daemon answers with silence, and from outside the process that is
+/// indistinguishable from never having been asked. All five capture channels end here, so
+/// without these lines "no download button on that page" and "no probe ever arrived" read
+/// identically in the log — which is to say the log could not be used to tell them apart,
+/// which is the whole reason to keep one.
 async fn probe_media(
     engine: Arc<Engine>,
     envelope: vortex_proto::RequestEnvelope,
     height: u32,
 ) -> Result<Vec<MediaCandidate>, String> {
-    match vortex_media::plan::inspect(&engine, &envelope, height).await {
-        Ok(candidate) => Ok(vec![candidate]),
-        Err(vortex_media::Error::Refused(refusal)) => Err(refusal.message),
-        Err(e) => match vortex_media::ytdlp::YtDlp::find() {
-            Some(tool) => vortex_media::ytdlp::extract(&tool, &envelope, height)
+    let url = loggable(envelope.effective_url()).to_owned();
+    let tab = envelope.tab_id.map(|id| id.0);
+    tracing::info!(url = %url, tab, "probe: asking our own parsers");
+
+    let declined = match vortex_media::plan::inspect(&engine, &envelope, height).await {
+        Ok(candidate) => {
+            tracing::info!(
+                url = %url,
+                variants = candidate.variants.len(),
+                audio = candidate.audio.len(),
+                subtitles = candidate.subtitles.len(),
+                live = candidate.live,
+                "probe: answered by our parsers",
+            );
+            return Ok(vec![candidate]);
+        }
+        Err(vortex_media::Error::Refused(refusal)) => {
+            // Final by design, and worth saying plainly: this is the product boundary
+            // doing its job, not a failure to investigate (04 §DRM).
+            tracing::info!(url = %url, "probe: refused as protected — {}", refusal.message);
+            return Err(refusal.message);
+        }
+        Err(e) => e,
+    };
+    tracing::debug!(url = %url, "probe: our parsers declined — {declined}");
+
+    let Some(tool) = vortex_media::ytdlp::YtDlp::find() else {
+        // Not a fact about this page. Without the extractor, channel 5 cannot answer on
+        // *any* page, which is worth a warning rather than another quiet nothing.
+        tracing::warn!(url = %url, "probe: no yt-dlp on this machine — channel 5 cannot answer");
+        return Err(declined.user_message());
+    };
+
+    match vortex_media::ytdlp::extract(&tool, &envelope, height).await {
+        Ok(found) => match extracted(&engine, &envelope, found, height).await {
+            Ok(candidates) => {
+                tracing::info!(url = %url, count = candidates.len(), "probe: answered by the extractor");
+                Ok(candidates)
+            }
+            // The extractor named a stream and our own parsers then could not read it.
+            // Two tools disagreeing about one page is the interesting case, not a footnote.
+            Err(unreadable) => {
+                tracing::warn!(url = %url, "probe: the extractor found a stream we could not read — {unreadable}");
+                // The extractor's own complaint is about the page; ours is about the manifest
+                // we actually fetched, and it is the more useful sentence.
+                Err(declined.user_message())
+            }
+        },
+        Err(nothing) => {
+            tracing::info!(url = %url, "probe: no stream on this page — {nothing}");
+            Err(declined.user_message())
+        }
+    }
+}
+
+/// A URL as it should appear in a log: everything up to the query.
+///
+/// The query string is where a signed URL keeps its credentials, and a rotating file on
+/// disk is the wrong place to leave one — the daemon holds a token so it can fetch a
+/// manifest, not so it can write it down. Origin and path are what someone reading the log
+/// is actually asking ("which site, which manifest"), and they carry no secret.
+fn loggable(url: &str) -> &str {
+    let end = url.find(['?', '#']).unwrap_or(url.len());
+    &url[..end]
+}
+
+/// Turns what the extractor found into candidates.
+///
+/// A ladder of finished URLs is already the answer. A manifest is not: it goes back
+/// through our own parsers, which build the real ladder — every rung, the audio
+/// renditions, the subtitle tracks — rather than the flattened list of formats an
+/// extractor prints. yt-dlp's contribution there is finding *where* the stream is
+/// described, which is the part our sniffer missed.
+async fn extracted(
+    engine: &Arc<Engine>,
+    envelope: &vortex_proto::RequestEnvelope,
+    found: vortex_media::ytdlp::Extracted,
+    height: u32,
+) -> Result<Vec<MediaCandidate>, String> {
+    match found {
+        vortex_media::ytdlp::Extracted::Ladder(candidate) => Ok(vec![*candidate]),
+        vortex_media::ytdlp::Extracted::Manifest(url) => {
+            tracing::debug!(
+                manifest = %loggable(&url),
+                "probe: the extractor found where the stream is described",
+            );
+            let mut envelope = envelope.clone();
+            envelope.url = url;
+            envelope.final_url = None;
+            vortex_media::plan::inspect(engine, &envelope, height)
                 .await
                 .map(|candidate| vec![candidate])
-                // The extractor's own complaint is about the page; ours is about the
-                // manifest we actually fetched, and it is the more useful sentence.
-                .map_err(|_| e.user_message()),
-            None => Err(e.user_message()),
-        },
+                .map_err(|e| e.user_message())
+        }
     }
 }
 
@@ -1068,4 +1158,31 @@ fn build_engine(settings: &Settings) -> Arc<Engine> {
     }));
     engine.limiter.set_limit(settings.global_speed_limit);
     Arc::new(engine)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::loggable;
+
+    /// A log line is a file on disk, and a signed URL's query is a credential.
+    ///
+    /// This is a privacy property rather than a formatting preference, which is why it is
+    /// asserted rather than left to whoever next edits the `tracing` calls.
+    #[test]
+    fn a_logged_url_keeps_its_path_and_drops_its_credentials() {
+        assert_eq!(
+            loggable("https://cdn.example.com/hls/master.m3u8?token=abc123&Expires=99"),
+            "https://cdn.example.com/hls/master.m3u8",
+        );
+        assert_eq!(
+            loggable("https://example.com/watch/1#t=90"),
+            "https://example.com/watch/1",
+        );
+        // Nothing to trim is the ordinary case, and it must not lose the last character.
+        assert_eq!(
+            loggable("https://example.com/hls/master.m3u8"),
+            "https://example.com/hls/master.m3u8",
+        );
+        assert_eq!(loggable(""), "");
+    }
 }

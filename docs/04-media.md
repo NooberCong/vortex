@@ -159,6 +159,32 @@ Vortex parser fails     →  yt-dlp --dump-json              (extract only)
 through its own scheduler, so adaptive concurrency, hedging, resume and the writer all still
 apply. yt-dlp's own downloader would give up every one of those.
 
+**An extraction returns one of two things, and they are different jobs.**
+
+| What came back | What happens next |
+| --- | --- |
+| **A ladder of finished URLs** — one file for the video, one for the audio | A *progressive* plan: each URL is probed for its length, cut into 4 MiB blocks, and handed to the same fetcher a manifest's segments go to. Nothing re-fetches the page. |
+| **A manifest** — an `.m3u8` or `.mpd` the sniffer never saw | Straight back to `plan::inspect`. Our own parsers build the real ladder, with the audio renditions, the subtitle tracks and the byte ranges that a flattened list of formats has already thrown away. |
+
+The two are never mixed into one ladder. A large site publishes both families at once —
+YouTube currently answers with thirty-odd progressive URLs *and* a dozen HLS playlists for
+the same video — and a rung that is a playlist sitting next to a rung that is an MP4 with
+the same number written on it means whichever the extractor listed last decides how *all*
+of them get fetched. Direct URLs win when there are any: they carry exact sizes and the
+complete resolution ladder.
+
+**A progressive block that goes missing stops the run.** A lost HLS segment costs four
+seconds of video and the file still plays, so the fetcher records a gap and carries on
+(§5). One file cut into byte ranges has no such slack — a hole in the middle of an MP4 is
+not a shorter MP4, it is a file no player will open — so everything contiguous stays on
+disk and the retry picks up from exactly that block.
+
+**The container is learned rather than declared.** An extractor hands back URLs and no
+codec strings, so the usual codec test has nothing to weigh. What the server answers with
+does: a WebM body is VP9 and Opus, neither of which goes into an MP4, so the file is saved
+as MKV — and, as everywhere else, the reason is shown rather than left as a surprise
+extension.
+
 Sidecar, bundled and self-updating on its own channel — extractors break weekly and cannot
 wait for an app release. `scripts/ytdlp.mjs` fetches the platform build at bundle time and
 verifies it against the `SHA2-256SUMS` the release publishes; nothing third-party is

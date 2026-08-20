@@ -309,6 +309,7 @@ mod tests {
             estimated_bytes: None,
             speculative: 0,
             payload: crate::plan::Payload::Append,
+            contiguous: false,
         }
     }
 

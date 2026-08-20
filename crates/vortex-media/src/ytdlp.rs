@@ -55,12 +55,27 @@ impl YtDlp {
     }
 }
 
+/// What an extraction found.
+///
+/// The two are not variations on one answer, they are different jobs. A ladder of finished
+/// URLs is something the scheduler can start on immediately. A manifest is something our
+/// own parsers should read — they build the real ladder, with its audio renditions, its
+/// subtitle tracks and its byte ranges, none of which survive being flattened into an
+/// extractor's list of formats.
+#[derive(Debug, Clone)]
+pub enum Extracted {
+    /// Finished URLs. One file per track, fetched directly.
+    Ladder(Box<MediaCandidate>),
+    /// Where the stream is described. Handed straight back to [`crate::plan::inspect`].
+    Manifest(String),
+}
+
 /// Asks yt-dlp what is on a page. Never asks it to fetch anything.
 pub async fn extract(
     tool: &YtDlp,
     envelope: &RequestEnvelope,
     preferred_height: u32,
-) -> Result<MediaCandidate, String> {
+) -> Result<Extracted, String> {
     let url = envelope.effective_url();
     let mut command = tokio::process::Command::new(tool.path());
     command
@@ -92,9 +107,20 @@ pub async fn extract(
     parse(&String::from_utf8_lossy(&output.stdout), url, preferred_height)
 }
 
-/// Turns one `--dump-single-json` object into a candidate. Pure, so the shape of yt-dlp's
-/// output can be asserted on without yt-dlp installed.
-pub fn parse(json: &str, url: &str, preferred_height: u32) -> Result<MediaCandidate, String> {
+/// Turns one `--dump-single-json` object into something the pipeline can act on. Pure, so
+/// the shape of yt-dlp's output can be asserted on without yt-dlp installed.
+///
+/// The formats are **partitioned by protocol before anything else**, because a large site
+/// publishes both families at once — YouTube currently answers with thirty-odd progressive
+/// URLs *and* a dozen HLS playlists for the same video — and they are not interchangeable
+/// rungs of one ladder. A `720p` that is a finished MP4 and a `720p` that is a playlist
+/// need different machinery to fetch, and a ladder that mixes them silently hands one to
+/// the other's code path.
+///
+/// Direct URLs win when there are any, because they carry exact sizes and a complete
+/// resolution ladder. Everything else is a manifest, and a manifest goes back to our own
+/// parsers rather than being flattened here.
+pub fn parse(json: &str, url: &str, preferred_height: u32) -> Result<Extracted, String> {
     let root: serde_json::Value =
         serde_json::from_str(json).map_err(|e| format!("yt-dlp returned something unreadable: {e}"))?;
 
@@ -116,7 +142,7 @@ pub fn parse(json: &str, url: &str, preferred_height: u32) -> Result<MediaCandid
     // Bitrates for `audio`, positionally — `MediaTrack` has nowhere to carry one, and
     // choosing a default without it means choosing whichever the extractor listed first.
     let mut audio_bandwidth: Vec<u64> = Vec::new();
-    let mut kind = MediaKind::Progressive;
+    let mut manifest: Option<String> = None;
 
     for format in &formats {
         let Some(media_url) = format.get("url").and_then(|u| u.as_str()) else {
@@ -128,14 +154,15 @@ pub fn parse(json: &str, url: &str, preferred_height: u32) -> Result<MediaCandid
             .unwrap_or_default();
         // Anything that is not plain HTTP or an HLS/DASH manifest is a protocol we would
         // have to reimplement, which is exactly what this fallback exists to avoid.
-        let manifest = match protocol {
-            p if p.contains("m3u8") => Some(MediaKind::Hls),
-            p if p.contains("dash") => Some(MediaKind::Dash),
-            "https" | "http" => None,
+        match protocol {
+            p if p.contains("m3u8") || p.contains("dash") => {
+                // The first one listed. yt-dlp orders worst-first, and for a site that
+                // publishes a real master every entry names the same document anyway.
+                manifest.get_or_insert_with(|| media_url.to_owned());
+                continue;
+            }
+            "https" | "http" => {}
             _ => continue,
-        };
-        if let Some(manifest) = manifest {
-            kind = manifest;
         }
 
         let vcodec = format.get("vcodec").and_then(|c| c.as_str()).unwrap_or("none");
@@ -185,7 +212,10 @@ pub fn parse(json: &str, url: &str, preferred_height: u32) -> Result<MediaCandid
     }
 
     if variants.is_empty() {
-        return Err("Vortex couldn't find a video on that page.".to_owned());
+        return match manifest {
+            Some(url) => Ok(Extracted::Manifest(url)),
+            None => Err("Vortex couldn't find a video on that page.".to_owned()),
+        };
     }
     let mut variants = one_per_resolution(variants);
     variants.sort_by_key(|v| (v.height.unwrap_or(0), v.bandwidth));
@@ -202,10 +232,13 @@ pub fn parse(json: &str, url: &str, preferred_height: u32) -> Result<MediaCandid
         })
         .map(|(index, _)| index as u32);
 
-    Ok(MediaCandidate {
+    Ok(Extracted::Ladder(Box::new(MediaCandidate {
+        // The page, which is what this ladder is *of*. Nothing fetches it — a progressive
+        // plan is built from the variant and audio URLs — but it is the stable id for the
+        // stream and the handle a re-extraction would start from.
         id: url.to_owned(),
         manifest_url: url.to_owned(),
-        kind,
+        kind: MediaKind::Progressive,
         title,
         duration_secs: duration,
         live,
@@ -213,7 +246,7 @@ pub fn parse(json: &str, url: &str, preferred_height: u32) -> Result<MediaCandid
         audio,
         subtitles: Vec::new(),
         default_variant,
-    })
+    })))
 }
 
 /// How readily a codec plays back and muxes without a re-encode. Lower is better.
@@ -301,6 +334,14 @@ fn codec_label(vcodec: &str, acodec: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// The ladder, or a failure naming what came back instead.
+    fn ladder(json: &str, url: &str, height: u32) -> MediaCandidate {
+        match parse(json, url, height) {
+            Ok(Extracted::Ladder(candidate)) => *candidate,
+            other => panic!("expected a ladder of finished URLs, got {other:?}"),
+        }
+    }
+
     const DUMP: &str = r#"{
       "title": "A Conference Talk",
       "duration": 1800.0,
@@ -315,7 +356,7 @@ mod tests {
 
     #[test]
     fn a_dump_becomes_a_ladder_with_its_audio_kept_separate() {
-        let candidate = parse(DUMP, "https://example.com/watch", 1080).unwrap();
+        let candidate = ladder(DUMP, "https://example.com/watch", 1080);
         assert_eq!(candidate.title, "A Conference Talk");
         assert_eq!(candidate.duration_secs, Some(1800.0));
         assert_eq!(candidate.kind, MediaKind::Progressive);
@@ -350,7 +391,7 @@ mod tests {
     fn a_resolution_gets_one_rung_and_not_one_per_codec() {
         // An extractor reports every encode a site publishes. Handed through unchanged
         // that is a panel with `720p` written on three rows, which is not a choice.
-        let candidate = parse(YOUTUBE, "https://example.com/watch", 1080).unwrap();
+        let candidate = ladder(YOUTUBE, "https://example.com/watch", 1080);
         let rungs: Vec<_> = candidate
             .variants
             .iter()
@@ -370,7 +411,7 @@ mod tests {
     fn the_default_audio_is_the_best_one_in_the_original_language() {
         // Taking the first track is a 4K download with 48 kbps audio. Taking the loudest
         // outright is a Portuguese dub of an English talk.
-        let candidate = parse(YOUTUBE, "https://example.com/watch", 1080).unwrap();
+        let candidate = ladder(YOUTUBE, "https://example.com/watch", 1080);
         let default: Vec<_> = candidate
             .audio
             .iter()
@@ -387,18 +428,42 @@ mod tests {
         let dump = r#"{"title":"x","formats":[
           {"url":"https://cdn/a","protocol":"https","vcodec":"avc1","acodec":"none","tbr":800.0},
           {"url":"https://cdn/b","protocol":"https","vcodec":"avc1","acodec":"none","tbr":1600.0}]}"#;
-        let candidate = parse(dump, "https://example.com/watch", 1080).unwrap();
+        let candidate = ladder(dump, "https://example.com/watch", 1080);
         assert_eq!(candidate.variants.len(), 2);
     }
 
     #[test]
     fn an_hls_format_hands_the_manifest_back_to_our_own_parser() {
+        // Not flattened into a one-rung ladder: our parsers read the master and build the
+        // real one, with the audio renditions and subtitle tracks an extractor's list of
+        // formats has already thrown away.
         let dump = r#"{"title":"Live","is_live":true,"formats":[
           {"url":"https://cdn.example/master.m3u8","protocol":"m3u8_native","vcodec":"avc1","acodec":"mp4a","height":720,"tbr":2500.0}]}"#;
-        let candidate = parse(dump, "https://example.com/live", 1080).unwrap();
-        assert_eq!(candidate.kind, MediaKind::Hls);
-        assert!(candidate.live);
-        assert_eq!(candidate.variants[0].id, "https://cdn.example/master.m3u8");
+        match parse(dump, "https://example.com/live", 1080).unwrap() {
+            Extracted::Manifest(url) => assert_eq!(url, "https://cdn.example/master.m3u8"),
+            other => panic!("a playlist is not a file to fetch: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_page_that_publishes_both_families_is_not_one_ladder() {
+        // What YouTube answers with today: thirty-odd finished URLs *and* a dozen HLS
+        // playlists for the same video. Mixed into one ladder, a rung that is a playlist
+        // sits next to a rung that is an MP4 with the same number written on it, and
+        // whichever the extractor happened to list last decides how *all* of them are
+        // fetched — which is a plan that fetches the page as if it were a manifest.
+        let dump = r#"{"title":"Both","formats":[
+          {"url":"https://cdn/720.mp4","protocol":"https","vcodec":"avc1","acodec":"none","height":720,"tbr":1200.0},
+          {"url":"https://cdn/audio.m4a","protocol":"https","vcodec":"none","acodec":"mp4a.40.2","tbr":128.0},
+          {"url":"https://manifest.example/hls_playlist/720","protocol":"m3u8_native","vcodec":"avc1","acodec":"none","height":720,"tbr":1200.0}]}"#;
+        let candidate = ladder(dump, "https://example.com/watch", 720);
+        assert_eq!(candidate.kind, MediaKind::Progressive);
+        assert_eq!(
+            candidate.variants.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(),
+            vec!["https://cdn/720.mp4"],
+            "the playlist is a different kind of thing and does not belong on this ladder"
+        );
+        assert_eq!(candidate.audio.len(), 1);
     }
 
     #[test]

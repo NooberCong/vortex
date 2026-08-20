@@ -3,7 +3,7 @@ import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Command, JobId, JobSpec, Resolution, Settings } from "@vortex/proto";
 
 import { daemon } from "./ipc";
-import { queue } from "./store.svelte";
+import { queue, type Job } from "./store.svelte";
 
 /**
  * Everything the window can ask for.
@@ -31,6 +31,25 @@ export const resume = (job: JobId) => send({ cmd: "resume", job });
 export const cancel = (job: JobId) => send({ cmd: "cancel", job });
 export const remove = (job: JobId, deleteFile = false) =>
   send({ cmd: "remove", job, deleteFile });
+
+/**
+ * The × on a row, and the Delete key. Asks first when the answer costs a file.
+ *
+ * Removing a finished download is two things the interface has always spelled as one: the
+ * row goes, and the file it produced either stays or does not. That is a question only the
+ * user can answer, and the moment to ask is here — before anything happens, while the file
+ * still has a name and a size to put in the sentence.
+ *
+ * Only for a completed job. Everything else has no finished file at stake: the engine
+ * downloads into `.vxpart` and renames at the very end, and the daemon's `retire` deletes
+ * the partial work whichever way the question is answered. Asking anyway would be a dialog
+ * whose two branches do the same thing, which is how an app teaches people to click
+ * through its dialogs without reading them.
+ */
+export function requestRemove(job: Job): void {
+  if (job.view.state.kind === "completed") queue.removing = job.id;
+  else void remove(job.id);
+}
 export const decide = (job: JobId, resolution: Resolution) =>
   send({ cmd: "decide", job, resolution });
 export const retryMux = (job: JobId) => send({ cmd: "retryMux", job });
@@ -83,8 +102,8 @@ export async function resumeAll(): Promise<void> {
 export async function open(path: string): Promise<void> {
   try {
     await openPath(path);
-  } catch {
-    queue.problem = "That file isn't there any more.";
+  } catch (e) {
+    queue.problem = whyNot(e);
   }
 }
 
@@ -92,7 +111,38 @@ export async function open(path: string): Promise<void> {
 export async function reveal(path: string): Promise<void> {
   try {
     await revealItemInDir(path);
-  } catch {
-    queue.problem = "That file isn't there any more.";
+  } catch (e) {
+    queue.problem = whyNot(e);
   }
+}
+
+/**
+ * What actually went wrong, rather than the one guess.
+ *
+ * These two used to answer every failure with "That file isn't there any more.", which is
+ * the single most expensive thing they could have said: it is a confident, specific claim
+ * about the user's disk, and when it is wrong it sends them to a folder to look for a file
+ * that is sitting in it. Opening fails for at least three reasons and only one of them is
+ * the file being gone - the others are the path falling outside the opener's allow-list,
+ * which is our packaging bug and not theirs, and the system having no application
+ * registered for the extension, which is neither.
+ *
+ * So the error is read rather than assumed, and where it is not recognised it is passed
+ * through. An unfamiliar sentence from the plugin is worth more than a familiar one we
+ * made up.
+ */
+function whyNot(e: unknown): string {
+  const detail = String((e as { message?: string })?.message ?? e ?? "").trim();
+
+  // `Error::ForbiddenPath`, verbatim from the plugin. Nothing the user can do about it.
+  if (/not allowed to open path/i.test(detail)) {
+    return "Vortex isn't allowed to open that folder. Use Show in folder - and report this.";
+  }
+  if (/no such file|not found|cannot find|does not exist/i.test(detail)) {
+    return "That file isn't there any more.";
+  }
+  if (/no application|no such application|not associated|unknown program/i.test(detail)) {
+    return "Nothing on this computer is set up to open that kind of file.";
+  }
+  return detail ? `Couldn't open that file. ${detail}` : "Couldn't open that file.";
 }

@@ -3,7 +3,7 @@ import { browser } from "wxt/browser";
 import type { MediaCandidate } from "@vortex/proto";
 import { MEDIA_CAPTURE } from "@/src/build";
 import { excludeMatches } from "@/src/denylist";
-import type { FromPage, ToPage } from "@/src/messages";
+import { post, type ToPage } from "@/src/messages";
 import { EVERY, Orphans } from "@/src/orphan";
 import { Overlay } from "@/src/overlay";
 
@@ -49,7 +49,7 @@ export default defineContentScript({
           void post({ kind: "download", selection, pageTitle });
         },
         dismiss(origin) {
-          void post({ kind: "dismiss", origin });
+          void post({ kind: "siteCapture", origin, on: false });
           overlay?.destroy();
           overlay = null;
         },
@@ -106,22 +106,6 @@ export default defineContentScript({
     });
   },
 });
-
-/**
- * One message to the background, and never an exception either way.
- *
- * The `try` is not belt-and-braces. Once the extension has been reloaded under an open
- * page, `sendMessage` throws before it ever returns a promise, so the `.catch` is not
- * attached to anything — which is the difference between a silent no-op and an uncaught
- * "Extension context invalidated" in the console of every tab the user has open.
- */
-function post(message: FromPage): Promise<unknown> {
-  try {
-    return browser.runtime.sendMessage(message).catch(() => undefined);
-  } catch {
-    return Promise.resolve(undefined);
-  }
-}
 
 /**
  * Re-acquires an expired URL in page context (03 §Handoff 3).

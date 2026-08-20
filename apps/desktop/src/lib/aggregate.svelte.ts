@@ -1,4 +1,8 @@
-import { ProgressBarStatus, type Window as TauriWindow } from "@tauri-apps/api/window";
+import {
+  ProgressBarStatus,
+  type ProgressBarState,
+  type Window as TauriWindow,
+} from "@tauri-apps/api/window";
 import { rate } from "@vortex/proto";
 
 import { daemon } from "./ipc";
@@ -28,6 +32,26 @@ export const aggregate = new Aggregate();
 type Taskbar = Pick<TauriWindow, "setProgressBar">;
 
 /**
+ * What the taskbar button should be showing right now.
+ *
+ * Three states, in the order they answer the user's question. Nothing working is a plain
+ * button — the app is idle and should look idle. Something working and measurable is the
+ * filled bar, which is the one readout a download manager owes the taskbar. Something
+ * working that *cannot* be measured — a chunked stream, an extractor that will not say how
+ * long the file is, a mux — is the indeterminate sweep: on Windows it animates in the same
+ * slot the filled bar would use, so "still going" is glanceable without a number the app
+ * would have to invent to show it.
+ *
+ * The last case is the point of this function. Sending `None` there, which is what a
+ * measurable-or-nothing rule does, makes a working app look like an idle one.
+ */
+export function taskbar(working: number, progress: number | null): ProgressBarState {
+  if (working === 0) return { status: ProgressBarStatus.None };
+  if (progress === null) return { status: ProgressBarStatus.Indeterminate };
+  return { status: ProgressBarStatus.Normal, progress: Math.round(progress * 100) };
+}
+
+/**
  * Starts sampling. Returns the stop function; the app calls it on teardown.
  *
  * The two platform surfaces are updated from the same tick and are allowed to fail
@@ -35,6 +59,14 @@ type Taskbar = Pick<TauriWindow, "setProgressBar">;
  * refuses to open because of one would not be.
  */
 export function sample(window: Taskbar | null): () => void {
+  /**
+   * The last thing the taskbar was told, so that it is only told again when the answer
+   * changes. Twice a second is the right cadence for a *number*; re-asserting the
+   * indeterminate sweep at that cadence is asking the shell to restart an animation it is
+   * already running.
+   */
+  let sent: string | null = null;
+
   const timer = setInterval(() => {
     const bps = queue.throughput;
     aggregate.history = [...aggregate.history, bps].slice(-HISTORY);
@@ -43,14 +75,11 @@ export function sample(window: Taskbar | null): () => void {
       .tooltip(queue.running > 0 ? `Vortex — ${rate(bps)}` : "Vortex")
       .catch(() => {});
 
-    const progress = queue.progress;
-    void window
-      ?.setProgressBar(
-        progress === null
-          ? { status: ProgressBarStatus.None }
-          : { status: ProgressBarStatus.Normal, progress: Math.round(progress * 100) },
-      )
-      .catch(() => {});
+    const next = taskbar(queue.working, queue.progress);
+    const key = JSON.stringify(next);
+    if (key === sent) return;
+    sent = key;
+    void window?.setProgressBar(next).catch(() => {});
   }, HZ);
 
   return () => clearInterval(timer);

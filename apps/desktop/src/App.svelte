@@ -7,11 +7,12 @@
   import { primaryAction } from "$lib/copy";
   import { daemon, native } from "$lib/ipc";
   import { match, type Intent } from "$lib/keys";
-  import { announce } from "$lib/notify";
+  import { announce, watchClicks } from "$lib/notify";
   import { expand, queue } from "$lib/store.svelte";
   import { applyAppearance } from "$lib/theme";
   import JobList from "./components/JobList.svelte";
   import NewDownload from "./components/NewDownload.svelte";
+  import RemoveDownload from "./components/RemoveDownload.svelte";
   import Settings from "./components/Settings.svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import Titlebar from "./components/Titlebar.svelte";
@@ -57,6 +58,13 @@
   /** The daemon has answered, one way or the other. Until then the splash stays up. */
   let booted = $state(false);
 
+  /**
+   * The job the Remove sheet is asking about. Resolved from the id rather than held as a
+   * reference, so a job the daemon retires out from under the sheet — the CLI, a second
+   * window — takes the question with it instead of leaving one about a row that is gone.
+   */
+  const removing = $derived(queue.removing === null ? null : (queue.get(queue.removing) ?? null));
+
   onMount(() => {
     const stops: Array<() => void> = [];
 
@@ -81,6 +89,7 @@
         void daemon.send({ cmd: "getSettings" }).catch(() => {});
       });
     void daemon.onLink((up) => (queue.connected = up)).then((off) => stops.push(off));
+    void watchClicks().then((off) => stops.push(off));
     void daemon
       .onTray((intent) => void (intent === "pauseAll" ? act.pauseAll() : act.resumeAll()))
       .then((off) => stops.push(off));
@@ -159,7 +168,9 @@
       case "close":
         // One escape, one thing: the sheet if there is one, then the filter, then the
         // expanded row. Closing all three at once loses more than the user asked to lose.
-        if (adding || settings) (adding = false), (settings = false);
+        // The removal question is first because it is modal over everything else.
+        if (queue.removing !== null) queue.removing = null;
+        else if (adding || settings) (adding = false), (settings = false);
         else if (searching) (searching = false), (queue.search = "");
         else if (queue.expanded !== null) void expand(null);
         else return;
@@ -171,8 +182,10 @@
         break;
       }
       case "remove":
-        if (!selected) return;
-        void act.remove(selected.id);
+        // Not while the sheet is already asking about one — the answer to that question is
+        // Enter or Escape, and a second Delete would move the question to another row.
+        if (!selected || queue.removing !== null) return;
+        act.requestRemove(selected);
         break;
       case "expand":
         if (!selected) return;
@@ -241,6 +254,10 @@
 
   {#if settings}
     <Settings onClose={() => (settings = false)} />
+  {/if}
+
+  {#if removing}
+    <RemoveDownload job={removing} onClose={() => (queue.removing = null)} />
   {/if}
 
   {#if queue.problem}

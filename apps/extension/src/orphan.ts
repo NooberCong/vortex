@@ -77,7 +77,7 @@ export class Orphans {
     if (location.href !== this.page) this.arm();
     if (this.settled) return;
 
-    if (!usablePlayers(playersOnPage()).some(loaded)) {
+    if (!hasLoadedPlayer()) {
       // Gone again — a player that was swapped out mid-settle starts its clock over.
       this.since = null;
       return;
@@ -96,6 +96,21 @@ export class Orphans {
     // nothing for an extractor to look at and no business being sent anywhere.
     this.settled = !/^https?:$/i.test(location.protocol);
   }
+}
+
+/**
+ * Is there a real, loaded player in this document right now?
+ *
+ * Exported because two callers ask the same question for the same reason, and a second
+ * definition of "a real player" is the kind of drift that ends with the badge and the
+ * extractor disagreeing about what is on the page. The watcher above asks it about the
+ * document it lives in; `entrypoints/frame.content.ts` asks it inside a subframe, where the top
+ * document is not merely unlikely to find the answer but structurally unable to — a
+ * cross-origin `contentDocument` is not readable, so no `querySelectorAll` from up there
+ * will ever see the player.
+ */
+export function hasLoadedPlayer(): boolean {
+  return usablePlayers(playersOnPage()).some(loaded);
 }
 
 /**

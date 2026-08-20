@@ -3,6 +3,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { RELEASES } from "@/src/build";
+
 // Vitest runs from the package root, and WXT's transform rewrites `import.meta.url` into
 // something that is no longer a file URL.
 const root = process.cwd();
@@ -26,8 +28,10 @@ describe("the store build", () => {
   let manifest: {
     permissions: string[];
     description: string;
+    homepage_url: string;
     web_accessible_resources?: unknown;
     key?: string;
+    content_scripts?: Array<{ all_frames?: boolean; js?: string[]; matches?: string[] }>;
   };
 
   beforeAll(() => {
@@ -84,6 +88,19 @@ describe("the store build", () => {
     expect(manifest.web_accessible_resources).toBeUndefined();
   });
 
+  it("declares no content script in every frame", () => {
+    // The frame reporter is channel 5's other half, and it is the only script here that
+    // asks for `all_frames` on `<all_urls>`. In a build with no channel 5 to report to
+    // that is an unexplainable injection into every advert and tracking frame on the web,
+    // and it would be reviewed as one. Like the MSE entrypoints it is dropped from the
+    // build rather than merely disabled (`wxt.config.ts`), so neither the file nor the
+    // manifest entry exists.
+    expect(files(out).some((path) => path.endsWith("frame.js"))).toBe(false);
+    for (const script of manifest.content_scripts ?? []) {
+      expect(script.all_frames ?? false, `${script.js?.join()} runs in every frame`).toBe(false);
+    }
+  });
+
   it("asks for no permission it no longer uses", () => {
     // `scripting` exists only to register the MSE loader per origin. Asking for it in a
     // build that cannot use it is an unexplainable permission on a store listing.
@@ -97,6 +114,15 @@ describe("the store build", () => {
     expect(manifest.permissions).not.toContain("webRequestBlocking");
   });
 
+  it("points its homepage at somewhere that exists", () => {
+    // A listing's website is a link a reviewer clicks and a user follows, and the two
+    // URLs in this project that say where Vortex lives are written in different files —
+    // the manifest here, the "app is missing" button in `src/build.ts`. They drifted once
+    // already, to a domain nobody had registered. Same origin is the whole assertion.
+    expect(new URL(manifest.homepage_url).origin).toBe(new URL(RELEASES).origin);
+    expect(RELEASES.startsWith(manifest.homepage_url + "/")).toBe(true);
+  });
+
   it("claims no id of its own", () => {
     // Development builds carry `key` so their id is predictable enough to register against
     // (`identity.ts`). The listing's id belongs to the listing, and is added to
@@ -106,6 +132,11 @@ describe("the store build", () => {
 
   it("describes itself as a download manager and names no site", () => {
     expect(manifest.description.toLowerCase()).toContain("download manager");
+    // The store truncates at 132 and rejects the upload rather than trimming it.
+    expect(manifest.description.length).toBeLessThanOrEqual(132);
+    // An extension that cannot do anything without other software has to say so where
+    // someone reads it before installing, not in the popup afterwards.
+    expect(manifest.description.toLowerCase()).toContain("app");
     for (const site of ["youtube", "netflix", "video", "stream"]) {
       expect(manifest.description.toLowerCase()).not.toContain(site);
     }

@@ -38,11 +38,22 @@ pub async fn run(options: Options) -> Result<()> {
             if matches!(e, vortex_media::Error::Refused(_)) {
                 anyhow::bail!("{}", e.user_message());
             }
-            match vortex_media::ytdlp::YtDlp::find() {
-                Some(tool) => vortex_media::ytdlp::extract(&tool, &envelope, preferred)
-                    .await
-                    .map_err(|_| anyhow::anyhow!("{}", e.user_message()))?,
-                None => anyhow::bail!("{}", e.user_message()),
+            let Some(tool) = vortex_media::ytdlp::YtDlp::find() else {
+                anyhow::bail!("{}", e.user_message());
+            };
+            match vortex_media::ytdlp::extract(&tool, &envelope, preferred).await {
+                Ok(vortex_media::ytdlp::Extracted::Ladder(candidate)) => *candidate,
+                // yt-dlp found where the stream is described; our own parsers read it.
+                // That is a real ladder with its audio renditions and subtitle tracks,
+                // rather than the flattened format list an extractor prints.
+                Ok(vortex_media::ytdlp::Extracted::Manifest(url)) => {
+                    let mut envelope = RequestEnvelope::new(&url);
+                    envelope.page_url = Some(options.url.clone());
+                    vortex_media::plan::inspect(&engine, &envelope, preferred)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("{}", e.user_message()))?
+                }
+                Err(_) => anyhow::bail!("{}", e.user_message()),
             }
         }
     };

@@ -30,7 +30,44 @@ export const REPLY_TIMEOUT = 12_000;
 
 type Listener = (event: Event) => void;
 
+/**
+ * Where the extension stands with respect to the rest of Vortex.
+ *
+ * Three states rather than a boolean, because "no answer" has two causes that call for
+ * opposite things from the user, and telling them the wrong one wastes their afternoon:
+ *
+ * - `ready` — the daemon answered a ping.
+ * - `stopped` — the native host is registered, so the app is on this machine; it is just
+ *   not running. Start it.
+ * - `missing` — no native host manifest at all. `vortexd --register` writes that during
+ *   install, so its absence means there is nothing installed to start (01 §Security
+ *   boundaries). Telling someone to "start Vortex" here is telling them to start a
+ *   program they do not have.
+ */
+export type Link = "ready" | "stopped" | "missing";
+
 let port: Browser.runtime.Port | null = null;
+
+/**
+ * How the platform described the last failed connection, if it described one.
+ *
+ * The only evidence that separates `missing` from `stopped`, and it arrives in two
+ * different shapes: Firefox throws from `connectNative`, Chromium returns a port that
+ * disconnects with the reason in `lastError`. Cleared by any message actually arriving,
+ * which is proof the host is registered and alive whatever it said last time.
+ */
+let refusal: string | null = null;
+
+/**
+ * A refusal that means "there is no such host", as opposed to "the host could not do it".
+ *
+ * Chromium: "Specified native messaging host not found." and "Access to the specified
+ * native messaging host is forbidden." Firefox: "No such native application io.vortex.host".
+ * A host that starts and then dies says something else entirely ("Native host has exited"),
+ * and that is a stopped daemon, not a missing app — the default below has to be `stopped`
+ * for exactly that reason.
+ */
+const UNREGISTERED = /not found|no such native|forbidden|not registered/i;
 const listeners = new Set<Listener>();
 /**
  * Requests still waiting for a reply.
@@ -58,12 +95,16 @@ function connect(): Browser.runtime.Port | null {
   try {
     const fresh = browser.runtime.connectNative(HOST_NAME);
     fresh.onMessage.addListener((message) => {
+      // Anything at all coming back is proof the host is registered and running, which
+      // retires whatever the last failure claimed.
+      refusal = null;
       const event = message as Event;
       for (const listener of listeners) listener(event);
     });
     fresh.onDisconnect.addListener(() => {
-      // `lastError` must be read or the platform logs it as unchecked.
-      void browser.runtime.lastError;
+      // `lastError` must be read or the platform logs it as unchecked — and it is also
+      // the only place Chromium says *why*, so it is read before the waiters are told.
+      refusal = browser.runtime.lastError?.message ?? null;
       if (port !== fresh) return;
       port = null;
       // The host manifest exists — `connectNative` did not throw — but the daemon behind
@@ -79,7 +120,8 @@ function connect(): Browser.runtime.Port | null {
       protocol: PROTOCOL_VERSION,
     } satisfies Command);
     return fresh;
-  } catch {
+  } catch (error) {
+    refusal = error instanceof Error ? error.message : String(error);
     port = null;
     return null;
   }
@@ -148,6 +190,20 @@ export async function reachable(): Promise<boolean> {
 }
 
 /**
+ * Reachable, and if not, whether there is anything installed to reach.
+ *
+ * `missing` is only ever asserted on evidence: a platform that said the host is not there.
+ * Anything else — a timeout, a host that exited, a refusal nobody recognises — falls back
+ * to `stopped`, because the cost of the two mistakes is not symmetric. Telling someone
+ * with a working install to go and download it again is a wasted download and a moment of
+ * doubt about whether they had it in the first place.
+ */
+export async function status(): Promise<Link> {
+  if (await reachable()) return "ready";
+  return refusal !== null && UNREGISTERED.test(refusal) ? "missing" : "stopped";
+}
+
+/**
  * Drops the port so the next call reconnects. Used by the liveness alarm.
  *
  * Subscriptions deliberately survive: `onEvent` listeners are the extension's standing
@@ -168,4 +224,5 @@ export function __resetForTests(): void {
   reset();
   listeners.clear();
   pending.clear();
+  refusal = null;
 }

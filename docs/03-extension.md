@@ -39,6 +39,7 @@ experimental. WXT builds both from one source.
 ├─ 3 ─ manifest sniffer ───────────── .m3u8 / .mpd / media MIME → a video exists here
 ├─ 4 ─ MSE content-script hook ────── the fallback for players that hide their manifest
 └─ 5 ─ the page itself ───────────── a player, and nothing on the wire explained it
+       └ 5a ─ frame reporter ─────── …including a player the top document cannot see
 ```
 
 The first four all watch the **network**, and they all rest on the same assumption: that a
@@ -158,6 +159,16 @@ contain this path at all.
 The envelope goes to `vortexd` via `ProbeMedia`, which parses the manifest and returns a
 `MediaCandidate[]` ladder. The overlay renders that.
 
+One manifest URL is seen dozens of times — a playlist is re-fetched every few seconds — so
+the sniffer remembers what it has asked about. There is no error path back from
+`ProbeMedia`: the daemon answers with a ladder or it does not answer at all. So a URL that
+produced a ladder is pinned and never probed again, and one that produced nothing is held
+for 30 seconds and then allowed to be asked about afresh. A probe can go nowhere for reasons
+that say nothing about the URL — the daemon was restarting, the port was dead until the next
+liveness alarm, the origin refused a replayed envelope — and retiring the URL on that basis
+turns a transient failure into a permanent silent one, on a manifest the player is still
+happily fetching.
+
 ### 4 — MSE hook (fallback)
 
 Some players fetch a manifest through a service worker, or construct segment URLs in a way
@@ -213,6 +224,40 @@ subprocess, and the thing being sent is the URL the user is looking at:
   lookup, because here the URL being sent *is* the page.
 
 Absent from the store build in the same way channels 3 and 4 are: not disabled, not present.
+
+### 5a — The frame reporter
+
+`entrypoints/content.ts` is `allFrames: false`, for two reasons that are both still right:
+the overlay belongs to the page rather than to each of its twenty tracking frames, and
+renewal works from the top document whichever frame owns the player, because cookies are
+sent for the *target* origin.
+
+The orphan watcher was swept along with them, and it should not have been. An enormous share
+of the web's players sit in a cross-origin `<iframe>` — every `/embed/` URL, every
+third-party player host — and from the top document those are not merely hard to find but
+**unreachable**: `contentDocument` is `null` across origins, so `document.querySelectorAll("video")`
+returns an empty list for as long as the page is open. Channel 5 could never fire on any of
+them, which is to say the channel written for "all four network channels missed" had a blind
+spot shaped like the most common way to embed a video.
+
+So `entrypoints/frame.content.ts` is a second content script, `allFrames: true`, that does
+exactly one thing: run the same `Orphans` watcher and report *there is a real player in
+here*. It draws nothing, answers no messages, and reads the DOM without touching it.
+
+The signal deliberately carries **no URL**. The top document is entitled to name itself
+because it *is* the page; a subframe is routinely someone else's code, and a message that
+let it nominate a URL would let it choose what the extractor goes and fetches. The
+background takes the page from `sender.tab.url`, which the browser fills in and the frame
+cannot influence, then runs it through the identical `probePage` guards as channel 5 proper.
+
+Two consequences of reusing `Orphans` unchanged, both accepted rather than overlooked:
+nothing calls `attributed()` in a frame, so a frame whose stream *was* attributed still asks
+once and the background drops it on the "ladder already known for this tab" check; and a
+player in an `about:srcdoc` or `blob:` frame is not reported, because the watcher declines
+to ask from a document the daemon could not fetch and judges that by its own protocol.
+
+Dropped from the store build as a file, like the MSE entrypoints — an unexplained
+`all_frames` injection on `<all_urls>` is exactly what a reviewer is looking for.
 
 ---
 

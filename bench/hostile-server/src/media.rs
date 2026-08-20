@@ -11,7 +11,7 @@
 
 use axum::body::Body;
 use axum::extract::{Path as UrlPath, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Router;
 use std::collections::HashMap;
@@ -24,6 +24,8 @@ struct Shared {
     root: PathBuf,
     hits: Arc<Mutex<HashMap<String, u64>>>,
     failures: Arc<Mutex<HashMap<String, u16>>>,
+    /// `path -> (first failing hit, status)`.
+    sustained: Arc<Mutex<HashMap<String, (u64, u16)>>>,
 }
 
 pub struct Origin {
@@ -38,6 +40,7 @@ impl Origin {
             root: root.to_path_buf(),
             hits: Arc::default(),
             failures: Arc::default(),
+            sustained: Arc::default(),
         };
         let app = Router::new()
             .route("/{*path}", axum::routing::get(handler))
@@ -81,17 +84,41 @@ impl Origin {
             .expect("failure map")
             .insert(path.to_owned(), status);
     }
+
+    /// Every request for `path` from the `after`-th onwards gets `status`.
+    ///
+    /// A probe is a request like any other, so "fail the transfer but not the probe" needs
+    /// to count rather than to queue.
+    pub fn fail_from(&self, path: &str, after: u64, status: u16) {
+        self.shared
+            .sustained
+            .lock()
+            .expect("failure map")
+            .insert(path.to_owned(), (after, status));
+    }
 }
 
-async fn handler(State(shared): State<Shared>, UrlPath(path): UrlPath<String>) -> Response {
-    *shared
-        .hits
-        .lock()
-        .expect("hit counter")
-        .entry(path.clone())
-        .or_default() += 1;
+async fn handler(
+    State(shared): State<Shared>,
+    UrlPath(path): UrlPath<String>,
+    headers: HeaderMap,
+) -> Response {
+    let seen = {
+        let mut hits = shared.hits.lock().expect("hit counter");
+        let count = hits.entry(path.clone()).or_default();
+        *count += 1;
+        *count
+    };
 
-    if let Some(status) = shared.failures.lock().expect("failure map").remove(&path) {
+    let sustained = shared
+        .sustained
+        .lock()
+        .expect("failure map")
+        .get(&path)
+        .copied()
+        .filter(|(after, _)| seen >= *after)
+        .map(|(_, status)| status);
+    if let Some(status) = sustained.or_else(|| shared.failures.lock().expect("failure map").remove(&path)) {
         return Response::builder()
             .status(StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR))
             .body(Body::empty())
@@ -103,17 +130,81 @@ async fn handler(State(shared): State<Shared>, UrlPath(path): UrlPath<String>) -
     for part in path.split('/').filter(|p| *p != ".." && !p.is_empty()) {
         file.push(part);
     }
-    match std::fs::read(&file) {
-        Ok(body) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"))
-            .body(Body::from(body))
-            .expect("a file response"),
-        Err(_) => Response::builder()
+    let Ok(body) = std::fs::read(&file) else {
+        return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
-            .expect("a 404"),
+            .expect("a 404");
+    };
+
+    // `Accept-Ranges: bytes` was already being advertised, so a server that then ignored
+    // `Range` was lying — and a probe believes what it is told. Progressive downloads are
+    // built entirely out of ranged requests, so the lie is the difference between testing
+    // the block path and never reaching it.
+    let requested = headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| parse_range(value, body.len() as u64));
+    let Some((start, end)) = requested else {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"))
+            .header(header::CONTENT_TYPE, mime_for(&file))
+            .body(Body::from(body))
+            .expect("a file response");
+    };
+    if start >= body.len() as u64 {
+        return Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes */{}", body.len()),
+            )
+            .body(Body::empty())
+            .expect("a 416");
     }
+    let total = body.len() as u64;
+    let slice = body[start as usize..=(end as usize)].to_vec();
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"))
+        .header(header::CONTENT_TYPE, mime_for(&file))
+        .header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{total}"),
+        )
+        .body(Body::from(slice))
+        .expect("a partial response")
+}
+
+/// `bytes=a-b`, `bytes=a-`, clamped to the file. One range only — which is all any client
+/// in this project ever asks for.
+fn parse_range(value: &str, length: u64) -> Option<(u64, u64)> {
+    let spec = value.trim().strip_prefix("bytes=")?;
+    if spec.contains(',') {
+        return None;
+    }
+    let (start, end) = spec.split_once('-')?;
+    let start: u64 = start.trim().parse().ok()?;
+    let end = match end.trim() {
+        "" => length.saturating_sub(1),
+        text => text.parse::<u64>().ok()?.min(length.saturating_sub(1)),
+    };
+    (end >= start).then_some((start, end))
+}
+
+/// Enough of a content type for the progressive path, which reads one to name its track
+/// files. Everything else the harness serves is identified by its manifest.
+fn mime_for(file: &Path) -> HeaderValue {
+    let mime = match file.extension().and_then(|e| e.to_str()) {
+        Some("mp4") => "video/mp4",
+        Some("m4a") => "audio/mp4",
+        Some("webm") => "video/webm",
+        Some("m3u8") => "application/vnd.apple.mpegurl",
+        Some("mpd") => "application/dash+xml",
+        _ => "application/octet-stream",
+    };
+    HeaderValue::from_static(mime)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -248,6 +339,49 @@ fn write_subtitles(dir: &Path) {
          #EXTINF:2.0,\ns0.vtt\n#EXTINF:2.0,\ns1.vtt\n#EXTINF:2.0,\ns2.vtt\n#EXT-X-ENDLIST\n",
     )
     .expect("the subtitle playlist");
+}
+
+/// The same six seconds as two finished files — video in one, audio in the other.
+///
+/// This is the shape an extractor hands back: no manifest, no segments, two URLs and a
+/// `Content-Length`. It is also the shape YouTube serves, which is why the path exists.
+pub fn build_progressive(dir: &Path) -> bool {
+    let Some(ffmpeg) = tool("ffmpeg") else {
+        return false;
+    };
+    std::fs::create_dir_all(dir).expect("the fixture directory");
+
+    let video: Vec<String> = common_args()
+        .into_iter()
+        .chain(
+            [
+                "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10:duration=6",
+                "-c:v", "libx264", "-preset", "ultrafast", "-g", "10", "-t", "6", "-an",
+                "-movflags", "+faststart",
+            ]
+            .iter()
+            .map(|s| s.to_string()),
+        )
+        .chain(std::iter::once(slashes(&dir.join("video.mp4"))))
+        .collect();
+
+    let audio: Vec<String> = common_args()
+        .into_iter()
+        .chain(
+            [
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+                "-c:a", "aac", "-b:a", "128k", "-t", "6", "-vn",
+            ]
+            .iter()
+            .map(|s| s.to_string()),
+        )
+        .chain(std::iter::once(slashes(&dir.join("audio.m4a"))))
+        .collect();
+
+    for args in [video, audio] {
+        run(&ffmpeg, &args);
+    }
+    true
 }
 
 /// The same six seconds packaged as DASH by ffmpeg: a real `SegmentTemplate` with

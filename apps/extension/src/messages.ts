@@ -8,7 +8,10 @@
  * daemon, and the page's `MediaSource` cannot be observed from an isolated world.
  */
 
+import { browser } from "wxt/browser";
+
 import type { MediaCandidate, MediaSelection } from "@vortex/proto";
+import type { Link } from "./host";
 
 /** Background → content script. */
 export type ToPage =
@@ -22,14 +25,64 @@ export type ToPage =
 /** Content script → background. */
 export type FromPage =
   | { kind: "ready" }
-  | { kind: "download"; selection: MediaSelection; pageTitle: string }
-  | { kind: "dismiss"; origin: string }
+  /**
+   * `tabId` is for the popup, which is not in a tab and so has no `sender.tab` for the
+   * background to read the page off. A content script leaves it out and is believed by
+   * the browser instead — a page cannot nominate a tab it is not in.
+   */
+  | { kind: "download"; selection: MediaSelection; pageTitle: string; tabId?: number }
+  /**
+   * Turn capture on or off for one origin (03 §The overlay).
+   *
+   * One message rather than a `dismiss` and an `undismiss`, because there is one piece of
+   * state and two places that set it: the overlay's "Not on this site", which can only
+   * ever turn it off, and the popup's switch, which is the only way back — the overlay
+   * cannot offer one, having removed itself from the page.
+   */
+  | { kind: "siteCapture"; origin: string; on: boolean }
   /**
    * A real player has been loaded on this page long enough that every other channel
    * would have produced a ladder by now, and none did (03 §5). The page URL is offered
    * to the daemon's extractor, which is the only thing left that can look at it.
    */
-  | { kind: "orphan"; pageUrl: string };
+  | { kind: "orphan"; pageUrl: string }
+  /**
+   * The same signal as `orphan`, raised from a **subframe** (03 §5, embedded players).
+   *
+   * It carries no URL, and that is the point. The top document is entitled to name itself
+   * because it *is* the page; a subframe is the one sender that is routinely someone
+   * else's code, and a message that let it nominate a URL would let it choose what the
+   * daemon's extractor goes and fetches. The background reads `sender.tab.url` instead,
+   * which the browser fills in and the frame cannot influence.
+   */
+  | { kind: "framePlayer" }
+  /** What the popup needs to draw itself, for the tab it was opened over. */
+  | { kind: "popupState"; tabId: number };
+
+/**
+ * The popup's answer to `popupState`.
+ *
+ * Deliberately everything at once. The popup is opened, read and dismissed in a couple of
+ * seconds; three round trips to fill in three panels would show it assembling itself.
+ */
+export interface PopupState {
+  /** `null` when the tab has no origin to speak of — a new tab, a PDF, a settings page. */
+  origin: string | null;
+  pageTitle: string;
+  /** The user has switched Vortex off for this origin. */
+  optedOut: boolean;
+  /** Capture is off everywhere, from the app's settings. */
+  captureOff: boolean;
+  /**
+   * Whether the rest of Vortex is there, and if not, which "not".
+   *
+   * Not a boolean, because the popup's whole job in the unhappy case is to say the true
+   * thing: "start the app" and "you do not have the app" are different sentences with
+   * different buttons under them (`src/host.ts`).
+   */
+  daemon: Link;
+  candidates: MediaCandidate[];
+}
 
 /**
  * MAIN-world hook → isolated content script, over `window.postMessage`.
@@ -55,3 +108,20 @@ export interface MseReport {
 }
 
 export type Internal = FromPage | MseReport;
+
+/**
+ * Sends one internal message, and never throws either way.
+ *
+ * The `try` is not belt-and-braces. Once the extension has been reloaded under an open
+ * page, `sendMessage` throws *synchronously*, before it ever returns a promise — so the
+ * `.catch` is not attached to anything. That is the difference between a silent no-op and
+ * an uncaught "Extension context invalidated" in the console of every tab the user has
+ * open, for as long as they leave it open.
+ */
+export function post(message: Internal): Promise<unknown> {
+  try {
+    return browser.runtime.sendMessage(message).catch(() => undefined);
+  } catch {
+    return Promise.resolve(undefined);
+  }
+}

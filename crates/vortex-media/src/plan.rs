@@ -58,6 +58,15 @@ pub struct Track {
     /// Trailing segments that are guesses. See [`crate::dash::Representation::speculative`].
     pub speculative: u32,
     pub payload: Payload,
+    /// Whether a lost segment ruins the track.
+    ///
+    /// A manifest track survives one: a missing HLS segment costs four seconds of video
+    /// and the file still plays, so [`crate::fetch`] records the gap and carries on rather
+    /// than throwing away an hour of successful work (04 §5). A track cut out of one file
+    /// by byte range has no such slack — a hole in the middle of an MP4 is not a shorter
+    /// MP4, it is a broken one — so a progressive track sets this and the run stops
+    /// instead, keeping everything contiguous already on disk for the retry.
+    pub contiguous: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -431,6 +440,12 @@ pub async fn resolve(
     selection: &MediaSelection,
     preference: ContainerPreference,
 ) -> Result<Plan> {
+    // A progressive ladder has no manifest to fetch — its `manifest_url` is the page the
+    // extractor was pointed at, and fetching that would hand `read` a document and get
+    // "that isn't a stream Vortex can read" for a video that is perfectly downloadable.
+    if selection.kind == MediaKind::Progressive {
+        return resolve_progressive(engine, envelope, selection, preference).await;
+    }
     let (text, fetched) = net::get_text(engine, envelope, &selection.manifest_url).await?;
     match read(&text, &fetched.final_url, fetched.content_type.as_deref())? {
         Manifest::Hls(master) => {
@@ -458,6 +473,207 @@ pub async fn resolve(
         }
         Manifest::Dash(mpd) => resolve_dash(&mpd, selection, preference),
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Progressive: a ladder with no manifest behind it
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// How much of a progressive file one request asks for.
+///
+/// Larger than a manifest segment because there is no segment boundary to respect: this is
+/// one file, and the only thing choosing the number is the trade between a sequential read
+/// pattern — which TCP and the origin both prefer — and how much can be held in flight.
+/// The fetcher buffers out-of-order arrivals up to its reorder budget, which at this size
+/// is sixteen blocks: more than the connection controller will ever have open at once.
+const PROGRESSIVE_BLOCK: u64 = 4 << 20;
+
+/// Stage 4 for a ladder an extractor produced (04 §yt-dlp).
+///
+/// There is nothing to parse. yt-dlp already resolved the URLs — one for the video, one
+/// for the audio — and what is left is a file of known length, which is the same shape as
+/// any other download: probe it, cut it into blocks, and hand it to the fetcher that
+/// already has the concurrency, the resume, the hedging and the rate limiter.
+///
+/// Without this branch `resolve` fetches `selection.manifest_url`, which for an extracted
+/// ladder is the *page* — and hands `read` a document, so a video that downloads perfectly
+/// well fails with "that link isn't a stream Vortex can read".
+///
+/// Two things differ from a manifest track, and both matter:
+///
+/// * **A missing block is fatal.** A lost HLS segment costs four seconds of video and the
+///   file still plays; a hole in the middle of an MP4 is a file no player will open. See
+///   [`Track::contiguous`].
+/// * **The container is learned, not declared.** An extractor hands back URLs and no codec
+///   strings, so [`choose_container`] has nothing to weigh. What the server answers with
+///   does: a WebM body is VP9 and Opus, neither of which goes into an MP4.
+async fn resolve_progressive(
+    engine: &Engine,
+    envelope: &RequestEnvelope,
+    selection: &MediaSelection,
+    preference: ContainerPreference,
+) -> Result<Plan> {
+    let video = Some(selection.variant_id.as_str()).filter(|id| !id.is_empty());
+    let audio = selection.audio_id.as_deref().filter(|id| !id.is_empty());
+    if video.is_none() && audio.is_none() {
+        return Err(Error::Unreadable(
+            "Vortex didn't get a stream to download for that video.".to_owned(),
+        ));
+    }
+
+    let mut tracks = Vec::new();
+    for (role, url, stem) in [(Role::Video, video, "video"), (Role::Audio, audio, "audio")] {
+        let Some(url) = url else { continue };
+        tracks.push(progressive_track(engine, envelope, role, url, stem).await?);
+    }
+
+    let (container, container_note) = progressive_container(&tracks, preference);
+    Ok(Plan {
+        title: selection.title.clone(),
+        kind: MediaKind::Progressive,
+        // An extractor describes a live stream as HLS or DASH, never as a pair of finished
+        // files, so this path is reached for recorded video only.
+        live: false,
+        duration_secs: None,
+        tracks,
+        container,
+        container_note,
+    })
+}
+
+/// One progressive track, cut into blocks.
+async fn progressive_track(
+    engine: &Engine,
+    envelope: &RequestEnvelope,
+    role: Role,
+    url: &str,
+    stem: &str,
+) -> Result<Track> {
+    // The captured envelope, pointed at the media rather than at the page: the same
+    // `User-Agent`, the same `Referer`, the same cookie jar the player used. A CDN that
+    // sees a different `Referer` than the page did answers 403.
+    let mut probing = envelope.clone();
+    probing.url = url.to_owned();
+    probing.final_url = None;
+    let probe = vortex_engine::probe::probe(&engine.transport, &probing).await?;
+
+    let extension = progressive_extension(role, probe.content_type.as_deref(), &probe.final_url);
+    let segments = match probe.total {
+        Some(total) if total > 0 && probe.ranges => blocks(&probe.final_url, total),
+        // A server that will not seek has to be taken in one piece, and the fetcher can
+        // only do that in memory. Refusing in a sentence beats a run that dies on a size
+        // check after holding half a gigabyte of it.
+        total => {
+            if total.is_some_and(|bytes| bytes as usize > net::MAX_SEGMENT) {
+                return Err(Error::Unsupported(drm::Unsupported {
+                    message: "That server won't send this video in parts, and it's too big \
+                              to take in one piece."
+                        .to_owned(),
+                }));
+            }
+            vec![Segment {
+                resource: Resource::whole(probe.final_url.clone()),
+                key: None,
+                duration: 0.0,
+            }]
+        }
+    };
+
+    Ok(Track {
+        role,
+        language: None,
+        codecs: None,
+        init: None,
+        segments,
+        file: format!("{stem}.{extension}"),
+        estimated_bytes: probe.total,
+        // Every block is one the server's own `Content-Length` promised. Nothing is guessed.
+        speculative: 0,
+        payload: Payload::Append,
+        contiguous: true,
+    })
+}
+
+/// Cuts a file of known length into fixed blocks. The last one is short.
+fn blocks(url: &str, total: u64) -> Vec<Segment> {
+    (0..total.div_ceil(PROGRESSIVE_BLOCK))
+        .map(|index| {
+            let offset = index * PROGRESSIVE_BLOCK;
+            Segment {
+                resource: Resource {
+                    url: url.to_owned(),
+                    range: Some((offset, PROGRESSIVE_BLOCK.min(total - offset))),
+                },
+                key: None,
+                duration: 0.0,
+            }
+        })
+        .collect()
+}
+
+/// What to call the track file so ffmpeg sniffs it correctly.
+///
+/// The `Content-Type` answers when there is one; an extension on the URL is the fallback,
+/// and an unlabelled stream is assumed to be what an unlabelled stream nearly always is.
+/// ffmpeg still looks inside the file before believing any of it — the name only has to
+/// avoid actively lying.
+fn progressive_extension(role: Role, content_type: Option<&str>, url: &str) -> &'static str {
+    let mime = content_type.unwrap_or("").to_ascii_lowercase();
+    let audio = role == Role::Audio;
+    if mime.contains("webm") || mime.contains("matroska") {
+        return if audio { "weba" } else { "webm" };
+    }
+    if mime.contains("mp4") {
+        return if audio { "m4a" } else { "mp4" };
+    }
+    if audio && (mime.contains("mpeg") || mime.contains("mp3")) {
+        return "mp3";
+    }
+    let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
+    for (suffix, extension) in [
+        (".webm", "webm"),
+        (".weba", "weba"),
+        (".m4a", "m4a"),
+        (".mp3", "mp3"),
+        (".mkv", "mkv"),
+        (".mov", "mov"),
+        (".mp4", "mp4"),
+    ] {
+        if path.ends_with(suffix) {
+            return extension;
+        }
+    }
+    if audio {
+        "m4a"
+    } else {
+        "mp4"
+    }
+}
+
+/// MP4 or MKV, decided by what the tracks turned out to be rather than by codec strings
+/// nobody sent.
+fn progressive_container(
+    tracks: &[Track],
+    preference: ContainerPreference,
+) -> (Container, Option<String>) {
+    match preference {
+        ContainerPreference::Mp4 => return (Container::Mp4, None),
+        ContainerPreference::Mkv => return (Container::Mkv, None),
+        ContainerPreference::Auto => {}
+    }
+    let matroska = tracks.iter().any(|track| {
+        matches!(
+            track.file.rsplit('.').next(),
+            Some("webm") | Some("weba") | Some("mkv")
+        )
+    });
+    if matroska {
+        return (
+            Container::Mkv,
+            Some("Saved as MKV — MP4 can't hold WebM's video and audio.".to_owned()),
+        );
+    }
+    (Container::Mp4, None)
 }
 
 async fn resolve_hls(
@@ -583,6 +799,7 @@ fn track_from_media(
         // An HLS media playlist lists every segment it has. Nothing is guessed.
         speculative: 0,
         payload: payload_for(role, extension),
+        contiguous: false,
     }
 }
 
@@ -683,6 +900,7 @@ fn track_from_rep(
         // DASH text representations are whole documents or `wvtt` inside fMP4; neither is
         // the segmented-WebVTT shape that needs stitching.
         payload: Payload::Append,
+        contiguous: false,
     }
 }
 
@@ -763,7 +981,76 @@ mod tests {
             estimated_bytes: None,
             speculative: 0,
             payload: Payload::Append,
+            contiguous: false,
         }
+    }
+
+
+    #[test]
+    fn a_progressive_file_is_cut_into_whole_blocks_with_a_short_last_one() {
+        // Every byte exactly once, in order: the fetcher appends what arrives, so an
+        // overlap duplicates bytes and a gap corrupts the file — neither is recoverable.
+        let cut = blocks("https://cdn/v.mp4", (10 << 20) + 7);
+        assert_eq!(cut.len(), 3);
+        let ranges: Vec<_> = cut.iter().map(|s| s.resource.range.unwrap()).collect();
+        assert_eq!(
+            ranges,
+            vec![(0, 4 << 20), (4 << 20, 4 << 20), (8 << 20, (2 << 20) + 7)]
+        );
+        assert_eq!(
+            ranges.iter().map(|(_, length)| length).sum::<u64>(),
+            (10 << 20) + 7
+        );
+    }
+
+    #[test]
+    fn a_file_shorter_than_one_block_is_still_one_block() {
+        let cut = blocks("https://cdn/v.mp4", 512);
+        assert_eq!(cut.len(), 1);
+        assert_eq!(cut[0].resource.range, Some((0, 512)));
+    }
+
+    #[test]
+    fn a_track_file_is_named_after_what_the_server_said_it_was() {
+        // ffmpeg sniffs, but a name that actively lies is how a WebM ends up being read as
+        // an MP4 and the mux fails on a file that downloaded perfectly.
+        let name = |role, mime: Option<&str>, url| progressive_extension(role, mime, url);
+        assert_eq!(name(Role::Video, Some("video/webm"), "https://cdn/x"), "webm");
+        assert_eq!(name(Role::Audio, Some("audio/webm"), "https://cdn/x"), "weba");
+        assert_eq!(name(Role::Video, Some("video/mp4"), "https://cdn/x"), "mp4");
+        assert_eq!(name(Role::Audio, Some("audio/mp4"), "https://cdn/x"), "m4a");
+        // YouTube's media URLs have no extension and no useful path, which is the case the
+        // content type exists for; the fallbacks are for the sites that do.
+        assert_eq!(name(Role::Video, None, "https://cdn/videoplayback?itag=137"), "mp4");
+        assert_eq!(name(Role::Video, None, "https://cdn/a/b.webm?token=1"), "webm");
+        assert_eq!(name(Role::Audio, None, "https://cdn/a/b.mp3#t=1"), "mp3");
+    }
+
+    #[test]
+    fn a_webm_pair_is_saved_as_mkv_and_says_why() {
+        // No codec strings come back from an extractor, so the usual `choose_container`
+        // has nothing to weigh — and MP4 cannot hold what WebM carries.
+        let named = |file: &str| Track {
+            file: file.into(),
+            ..track(Role::Video, None)
+        };
+        let (container, note) = progressive_container(
+            &[named("video.webm"), named("audio.weba")],
+            ContainerPreference::Auto,
+        );
+        assert_eq!(container, Container::Mkv);
+        assert!(note.is_some(), "a container the user did not ask for is always explained");
+
+        let (container, note) = progressive_container(
+            &[named("video.mp4"), named("audio.m4a")],
+            ContainerPreference::Auto,
+        );
+        assert_eq!(container, Container::Mp4);
+        assert_eq!(note, None);
+
+        // An explicit choice is still an explicit choice.
+        let (container, _) = progressive_container(&[named("video.webm")], ContainerPreference::Mp4);
+        assert_eq!(container, Container::Mp4);
     }
 
     #[test]

@@ -35,6 +35,15 @@
   const workers = $derived<WorkerFrame[]>(detail?.workers ?? []);
   const ceiling = $derived(queue.settings?.maxConnections ?? null);
   const decision = $derived(view.state.kind === "needsDecision" ? prompt(view.state.decision) : null);
+  /**
+   * Whether there is a file at `destPath` to point at.
+   *
+   * Only a completed job has one. A failed job's path is where the file *would* have gone,
+   * and offering "Show in folder" for it is a button whose only outcome is "that file isn't
+   * there any more" — an error message the user asked for by following the interface's own
+   * suggestion. A running job's bytes are in a `.vxpart` under a different name.
+   */
+  const saved = $derived(view.state.kind === "completed");
 
   function protocol(p: Protocol | null | undefined): string {
     if (p === "H3") return "HTTP/3 · QUIC";
@@ -140,13 +149,13 @@
 
   <div class="row-actions">
     <span class="path meta selectable" title={view.destPath}>{view.destPath}</span>
-    {#if view.state.kind === "completed"}
+    {#if saved}
       <button class="button" onclick={() => act.open(view.destPath)}>Open</button>
+      <button class="button" onclick={() => act.reveal(view.destPath)}>
+        <Icon name="folder" />
+        Show in folder
+      </button>
     {/if}
-    <button class="button" onclick={() => act.reveal(view.destPath)}>
-      <Icon name="folder" />
-      Show in folder
-    </button>
   </div>
 </div>
 

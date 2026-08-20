@@ -17,6 +17,7 @@
 
 mod chrome;
 mod link;
+mod toast;
 mod tray;
 
 use std::sync::Arc;
@@ -126,14 +127,15 @@ pub fn run() {
             }
         })
         .plugin(tauri_plugin_dialog::init())
-        // A transfer the user walked away from is the one thing this app knows and they
-        // cannot see. See `src/lib/notify.ts` for what it does and does not announce.
+        // Only for the permission prompt. The notifications themselves are sent by
+        // `toast`, because the plugin's desktop path cannot report a click on one.
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             send,
             watch,
             connected,
+            toast::notify,
             tray::tooltip
         ])
         .setup(|app| {

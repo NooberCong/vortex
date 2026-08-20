@@ -1,0 +1,392 @@
+/*
+ * The toolbar popup.
+ *
+ * Every value comes from `@vortex/tokens`, which is what makes this look like Vortex
+ * rather than like a browser extension. The one rule the tokens carry applies here too:
+ * colour is reserved for data, so this whole surface is ink, paper and hairlines. The
+ * only saturated value in the file is `--attention`, on the one thing that is genuinely
+ * wrong — a daemon that is not answering.
+ */
+
+:root {
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+body {
+  width: 380px;
+  max-height: 580px;
+  overflow-y: auto;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Firefox sizes a popup to its content and then refuses to grow it. */
+html {
+  background: var(--bg);
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s4) var(--s4) var(--s3);
+}
+
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--t-micro);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.wordmark img {
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-sm);
+}
+
+/*
+ * The daemon light.
+ *
+ * Achromatic while everything is fine — a green dot would be colour spent on chrome, and
+ * there is nothing to celebrate about a working connection. Red is the exception the
+ * tokens allow, and this is exactly the case it is for: nothing on this panel can do
+ * anything at all while the daemon is not answering.
+ */
+.status {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--t-meta);
+  color: var(--text-faint);
+}
+
+.status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.status[data-up="false"] {
+  color: var(--attention);
+}
+
+.status[data-up="false"]::before {
+  background: var(--attention);
+}
+
+/* ── Sections ───────────────────────────────────────────────────────────── */
+
+section {
+  padding: var(--s3) var(--s4);
+  border-top: 1px solid var(--rule);
+}
+
+.eyebrow {
+  font-size: var(--t-micro);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: var(--s3);
+}
+
+.origin {
+  font-size: var(--t-name);
+  font-weight: 500;
+  margin-bottom: var(--s1);
+  overflow-wrap: anywhere;
+}
+
+/* ── Getting the app ────────────────────────────────────────────────────── */
+
+/*
+ * The one place this panel asks for something rather than reporting it, and the only
+ * filled control in the file. `--text` on `--bg`, not a colour: the tokens reserve colour
+ * for data, and a button is not data however much it would like to be.
+ */
+.install .what {
+  font-size: var(--t-name);
+  font-weight: 500;
+  margin-bottom: var(--s1);
+}
+
+.install .why {
+  font-size: var(--t-meta);
+  color: var(--text-faint);
+}
+
+.get {
+  display: block;
+  width: 100%;
+  margin-top: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--text);
+  color: var(--bg);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity var(--quick) var(--ease);
+}
+
+.get:hover {
+  opacity: 0.86;
+}
+
+.get:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ── The switch ─────────────────────────────────────────────────────────── */
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  cursor: pointer;
+  padding: var(--s2) 0 0;
+}
+
+.switch .copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.switch .what {
+  display: block;
+}
+
+.switch .why {
+  display: block;
+  font-size: var(--t-meta);
+  color: var(--text-faint);
+}
+
+.switch input {
+  appearance: none;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--track);
+  border: 1px solid var(--rule-strong);
+  position: relative;
+  cursor: pointer;
+  transition:
+    background var(--quick) var(--ease),
+    border-color var(--quick) var(--ease);
+}
+
+.switch input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform var(--quick) var(--ease);
+}
+
+.switch input:checked {
+  background: var(--text);
+  border-color: var(--text);
+}
+
+.switch input:checked::after {
+  transform: translateX(14px);
+}
+
+.switch input:focus-visible,
+.rung:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.switch input:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Captured streams ───────────────────────────────────────────────────── */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.card + .card {
+  margin-top: var(--s3);
+}
+
+.card .title {
+  font-size: var(--t-name);
+  font-weight: 500;
+  padding: var(--s3) var(--s3) 0;
+  overflow-wrap: anywhere;
+}
+
+.card .meta {
+  font-family: var(--font-num);
+  font-size: var(--t-meta);
+  color: var(--text-faint);
+  padding: 0 var(--s3) var(--s3);
+}
+
+.ladder {
+  border-top: 1px solid var(--rule);
+}
+
+/*
+ * A rung is the button. Choosing a resolution *is* the download — the same rule the
+ * overlay's ladder follows, so the two surfaces cannot teach different habits.
+ */
+.rung {
+  display: grid;
+  grid-template-columns: 1fr auto auto 16px;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  padding: var(--s2) var(--s3);
+  border: 0;
+  border-top: 1px solid var(--rule);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--quick) var(--ease);
+}
+
+.ladder .rung:first-child {
+  border-top: 0;
+}
+
+.rung:hover {
+  background: var(--bg);
+}
+
+.rung .name {
+  font-weight: 500;
+}
+
+.rung .codec,
+.rung .size {
+  font-family: var(--font-num);
+  font-size: var(--t-meta);
+  color: var(--text-faint);
+}
+
+.rung .arrow {
+  color: var(--text-faint);
+  text-align: right;
+}
+
+.rung[data-here="true"] .name::after {
+  content: "default";
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  font-weight: 450;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-left: var(--s2);
+}
+
+.rung.queued {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+/* ── Subtitles ──────────────────────────────────────────────────────────── */
+
+.subs {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-top: 1px solid var(--rule);
+  font-size: var(--t-meta);
+  cursor: pointer;
+}
+
+.subs .languages {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subs input {
+  appearance: none;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  position: relative;
+}
+
+.subs input:checked {
+  background: var(--text);
+  border-color: var(--text);
+}
+
+.subs input:checked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+  clip-path: polygon(20% 52%, 42% 72%, 80% 26%, 88% 36%, 43% 86%, 12% 60%);
+}
+
+/* ── Notes and empty states ─────────────────────────────────────────────── */
+
+.note {
+  font-size: var(--t-meta);
+  color: var(--text-faint);
+}
+
+.empty {
+  padding: var(--s5) var(--s4);
+  text-align: center;
+  color: var(--text-faint);
+  font-size: var(--t-meta);
+}
+
+.empty strong {
+  display: block;
+  font-size: var(--t-body);
+  font-weight: 450;
+  color: var(--text-dim);
+  margin-bottom: var(--s1);
+}

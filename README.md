@@ -50,7 +50,11 @@ Against an uncapped anycast CDN it will tie the browser, and it will say so.
 ### 3. It captures what the browser hides
 
 Every downloadable file, plus HLS and DASH video that the browser only ever renders into a
-`blob:` URL. One click, one MP4.
+`blob:` URL — including the players that sit in a cross-origin `<iframe>`, which is how most
+of the web embeds video and which the top document cannot see at all. When the stream is
+hidden well enough that none of the network channels find it, a `yt-dlp` extraction does,
+and whatever comes back — a manifest, or a pair of already-resolved URLs — is fetched by the
+same parallel engine rather than by yt-dlp's own downloader. One click, one MP4.
 
 ---
 
@@ -75,6 +79,13 @@ The installer is not yet code-signed, so Windows SmartScreen will warn on first 
 Chrome, Edge, Firefox, Brave, Vivaldi and Opera are all registered by the installer — and
 `vortexd` re-runs registration on every start, so a browser installed *after* Vortex still
 works.
+
+The extension's toolbar button answers the one question a capture overlay cannot answer once
+it has hidden itself: **why is there no download button here.** Whether the daemon is
+running — or was never installed, which is a different problem with a different fix — whether
+capture is switched on for this site, and every stream found on the tab with its full ladder.
+The per-site switch lives there because the overlay's own *Not on this site* was otherwise a
+one-way door.
 
 ---
 
@@ -222,12 +233,14 @@ vortex/
 │   ├── vortex-engine/      transfer core — no UI, no IPC, unit-testable
 │   ├── vortex-media/       HLS/DASH manifest parsing, ladder selection, mux plans
 │   ├── vortex-proto/       IPC types, single source of truth (ts-rs → TypeScript)
+│   ├── vortex-ipc/         the named pipe / UDS endpoint — the only `unsafe` in the tree
 │   ├── vortex-host/        native messaging host: stdio ⇄ named pipe
 │   ├── vortex-setup/       per-user OS integration: browser registration, login entry
+│   ├── vortex-cli/         `vortex` — a daemon client, and a `fetch` that runs the engine alone
 │   └── vortexd/            the daemon: engine + state + IPC server
 ├── apps/
 │   ├── desktop/            Tauri 2 shell + Svelte 5 frontend (the window)
-│   └── extension/          WXT — MV3 and MV2 targets
+│   └── extension/          WXT — MV3 and MV2 targets, page overlay and toolbar popup
 ├── packages/
 │   ├── proto/              the IPC types as TypeScript (ts-rs output + a barrel)
 │   └── tokens/             design tokens shared by desktop UI and page overlay
@@ -247,7 +260,7 @@ vortex/
 Requires Rust 1.85+, Node 20+, and the Tauri 2 prerequisites for the platform.
 
 ```sh
-cargo test --workspace && npm test        # 250 Rust tests, 237 TypeScript
+cargo test --workspace && npm test        # 258 Rust tests, 264 TypeScript
 npm run bundle                            # per-user installer, no admin rights
 npm run logo                              # redraw the mark after editing scripts/logo.mjs
 ```

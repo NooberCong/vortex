@@ -30,3 +30,17 @@ export const HOST_NAME = "io.vortex.host";
 
 /** How this client introduces itself in `Hello`. */
 export const CLIENT_NAME = "vortex-extension";
+
+/**
+ * Where the app comes from.
+ *
+ * The extension is half of Vortex and the smaller half: it watches, and it asks. Every
+ * byte is fetched by `vortexd`, which is installed separately — so on a machine where the
+ * app was never installed, nothing the extension offers can work, and the user is one
+ * click away from fixing it if anyone tells them where to click. Nobody was telling them.
+ *
+ * `/releases/latest` rather than a pinned tag: a version in here would go stale on the
+ * next release and send people to an old installer, and GitHub already redirects this to
+ * whatever the newest one is.
+ */
+export const RELEASES = "https://github.com/NooberCong/vortex/releases/latest";
