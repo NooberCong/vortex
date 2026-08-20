@@ -129,6 +129,21 @@ ffmpeg -i video.m4s -i audio.m4s -i subs.vtt \
 - Segments are kept until mux succeeds and verifies. Only then are they deleted.
 - Mux failure is recoverable: the segments are on disk, the job shows **Retry mux**.
 
+**ffmpeg ships in the box**, and it is the largest thing in the bundle by a wide margin —
+~115 MB against the daemon's 21. That is worth the space rather than an instruction in a
+README: every adaptive stream arrives as separate video and audio, so a missing muxer is not
+a degraded download, it is two files nobody can play. `scripts/ffmpeg.mjs` fetches the
+**LGPL static** build at bundle time and verifies it against the checksum the release
+publishes — LGPL because the GPL builds add x264 and x265 that a program doing `-c copy`
+will never call, static because `externalBin` stages one file per entry and a shared build
+is a small binary beside forty DLLs.
+
+**macOS is the exception, and it is deliberate.** The builds Vortex trusts cover Windows and
+Linux; the macOS binaries that exist elsewhere are either unsigned with no published hash or
+Intel-only, and shipping an executable this project cannot verify is worse than not shipping
+one. So `tauri.macos.conf.json` leaves `binaries/ffmpeg` out of `externalBin`, and there
+`Ffmpeg::find` falls through to `VORTEX_FFMPEG` and `PATH` exactly as it always did.
+
 ## 8. Naming
 
 Priority order, first hit wins:
@@ -172,6 +187,36 @@ the same video — and a rung that is a playlist sitting next to a rung that is 
 the same number written on it means whichever the extractor listed last decides how *all*
 of them get fetched. Direct URLs win when there are any: they carry exact sizes and the
 complete resolution ladder.
+
+**An extraction is authenticated, and it needs a JavaScript engine.** Neither was true
+originally and both were forced by the same site. YouTube answers an anonymous request from
+any client — `web`, `tv`, `ios`, `android_vr`, all of them — with *Sign in to confirm you're
+not a bot*, and its player challenge is JavaScript that yt-dlp no longer interprets itself.
+So two things travel with every extraction:
+
+| What | How | Why not the obvious way |
+| --- | --- | --- |
+| The page's session | A Netscape cookie jar in system temp, `--cookies`, deleted when the child exits. Only what the browser would send to that page's host, **one line per cookie** under a single domain — a `www.`/`m.` host is widened by rewriting that prefix away, never by writing a second copy. | `--add-header Cookie:` puts the session in argv, which every process on the machine can read. `--cookies-from-browser` cannot work at all on Windows: Chrome 127+ encrypts its jar app-bound, and the database is locked while the browser runs. |
+| A JS runtime | `--js-runtimes`, resolved beside the daemon, then `VORTEX_JS_RUNTIME`, then `PATH`, over `deno`, `node`, `quickjs`. | yt-dlp only looks for `deno`. A machine with Node on it and nothing else silently takes the deprecated path, where the answer is a ladder quietly missing rungs rather than an error. |
+
+`bun` is deliberately absent from that list even though yt-dlp accepts the word: every
+version after 1.3.14 is unsupported, so naming it would be choosing a runtime that is
+refused on arrival over one that works.
+
+**The bundled engine is QuickJS, not Deno.** Deno is yt-dlp's own default and is ~110 MB
+unpacked; `qjs` is 2 MB, is fully supported, and `yt-dlp -v` reports it as an available
+challenge provider. On a per-user installer that is the whole argument. A machine that
+already has Deno or Node still gets the faster engine it already paid for — the bundled one
+wins only because it is the version we know, and a QuickJS older than 2025-04-26 turns a
+challenge into minutes of CPU, which reaches a user as an overlay that never appears.
+
+Warnings are deliberately **not** suppressed. `--no-warnings` was on this command line once,
+and it hid *no supported JavaScript runtime could be found* behind an error about signing
+in — a whole class of failure reported as a different one. Every line yt-dlp writes to
+stderr is logged at debug, on the runs that succeed as well as the runs that do not.
+
+The session is the browser's, so an extraction can only reach what the user can: a signed-out
+browser gets a signed-out extraction, and on YouTube that is still refused.
 
 **A progressive block that goes missing stops the run.** A lost HLS segment costs four
 seconds of video and the file still plays, so the fetcher records a gap and carries on

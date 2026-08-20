@@ -1,5 +1,15 @@
 //! The `vortexd` binary. Everything it does lives in the library; this is the front door.
 
+// Windowless on Windows, because the login entry hands this path to Explorer and Explorer
+// gives a console-subsystem program a console: a black window sitting on the user's desktop
+// for as long as the daemon lives, which is the whole session. Nothing is lost by it — the
+// daemon's output is a log file (`install_logging`), never a terminal, and the two commands
+// that do print borrow the caller's console instead (`attach_parent_console`).
+//
+// Debug builds keep theirs, so that running one from a terminal behaves the way a developer
+// expects.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use clap::Parser;
 use std::path::PathBuf;
 use tracing_subscriber::prelude::*;
@@ -24,8 +34,9 @@ struct Args {
     /// `error`, `warn`, `info`, `debug`, `trace`, or any `RUST_LOG` filter.
     #[arg(long, default_value = "info")]
     log: String,
-    /// Register the native-messaging manifests with every browser and exit. The installer
-    /// runs this; so can anyone whose capture has gone quiet.
+    /// Register the native-messaging manifests with every browser, set the login entry to
+    /// whatever `settings.json` asks for, and exit. The installer runs this; so can anyone
+    /// whose capture has gone quiet or whose Vortex stopped starting at sign-in.
     #[arg(long, conflicts_with = "unregister")]
     register: bool,
     /// Remove every manifest and the login entry, and exit. The uninstaller runs this.
@@ -37,6 +48,10 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Before `--help`, `--version` and `--register` have anything to say.
+    #[cfg(windows)]
+    attach_parent_console();
+
     let args = Args::parse();
     let data_dir = args.data_dir.unwrap_or_else(vortexd::paths::data_dir);
 
@@ -92,14 +107,24 @@ fn integrate(data_dir: &std::path::Path, register: bool) -> anyhow::Result<()> {
     };
     print!("{}", vortex_setup::summarise(&outcomes));
 
-    // The login entry is Vortex's own, so uninstalling takes it and installing leaves it
-    // to the setting — a fresh install has no settings file yet, and writing the entry
-    // here would install a startup item the user was never asked about.
-    if !register {
-        match vortex_setup::set_autostart(false, &registration.daemon) {
-            Ok(()) => println!("{:<12} removed", "login entry"),
-            Err(e) => println!("{:<12} FAILED: {e}", "login entry"),
-        }
+    // The login entry is set here, on both sides, rather than left to the daemon.
+    //
+    // Leaving installs to the daemon looks tidier and is wrong, because an install is
+    // preceded by an *un*install: Tauri's NSIS runs the old uninstaller before copying
+    // anything, on an update and on a plain reinstall over an existing copy. That takes
+    // the entry with it, `--register` used to put nothing back, and the only thing left
+    // that would have was a daemon start — which is exactly what the missing entry
+    // prevents at the next sign-in. The symptom is a machine that comes back from a
+    // restart with the setting still reading "on" and nothing running.
+    //
+    // A first install has no settings file and gets the default, which is on: "installed"
+    // and "starts when I sign in" are the same thing to anyone who did not go looking for
+    // a toggle, and the toggle is one screen away for anyone who did.
+    let settings = vortexd::paths::settings_path(data_dir);
+    let enabled = register && vortexd::settings::autostart_intent(&settings);
+    match vortex_setup::set_autostart(enabled) {
+        Ok(()) => println!("{:<12} {}", "login entry", if enabled { "added" } else { "removed" }),
+        Err(e) => println!("{:<12} FAILED: {e}", "login entry"),
     }
 
     let failed = outcomes
@@ -110,6 +135,65 @@ fn integrate(data_dir: &std::path::Path, register: bool) -> anyhow::Result<()> {
         anyhow::bail!("no browser could be reached");
     }
     Ok(())
+}
+
+/// Points the standard handles at the console that started us, if a console started us.
+///
+/// The binary is windowless (see the top of the file), and Windows reads that as "this one
+/// never wants a console" — including when a person types `vortexd --register` at a prompt,
+/// where the report it prints would go nowhere at all. Borrowing the parent's console puts
+/// that output back in front of the person who asked for it.
+///
+/// A handle the parent already supplied is never replaced. The installer runs `--register`
+/// through a pipe and that pipe is what the install log is made of; overwriting it with the
+/// console would empty the log and put the text on a desktop nobody is looking at.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+        STD_HANDLE, STD_OUTPUT_HANDLE,
+    };
+
+    // Asked before attaching, because attaching is one of the things that can fill them in.
+    let missing = |id: STD_HANDLE| {
+        let handle = unsafe { GetStdHandle(id) };
+        handle.is_null() || handle == INVALID_HANDLE_VALUE
+    };
+    let (no_stdout, no_stderr) = (missing(STD_OUTPUT_HANDLE), missing(STD_ERROR_HANDLE));
+    if !no_stdout && !no_stderr {
+        return;
+    }
+    // Fails when there is no parent console — a login-time start, most of the time. That is
+    // the ordinary case, not an error: the daemon has nothing to say to a terminal anyway.
+    if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) } == 0 {
+        return;
+    }
+
+    let name: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
+    let console: HANDLE = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if console == INVALID_HANDLE_VALUE {
+        return;
+    }
+    for (id, needed) in [(STD_OUTPUT_HANDLE, no_stdout), (STD_ERROR_HANDLE, no_stderr)] {
+        if needed {
+            unsafe { SetStdHandle(id, console) };
+        }
+    }
 }
 
 /// Rotating JSON to `logs/`, plus human-readable stderr when asked. Returns the guard that

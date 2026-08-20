@@ -409,6 +409,72 @@ describe("choosing a resolution", () => {
   });
 });
 
+describe("clearing a badge without switching the site off", () => {
+  it("takes the badge off this video and leaves it off", () => {
+    playerOnPage();
+    const dismiss = vi.fn();
+    const overlay = new Overlay({ download: vi.fn(), dismiss });
+    overlay.show([ladder()]);
+
+    const [node] = overlay.__nodesForTests();
+    node!.querySelector<HTMLButtonElement>(".clear")!.click();
+    expect(overlay.__nodesForTests()).toHaveLength(0);
+
+    // The daemon is never told. This is the temporary one; `dismiss` is the other button.
+    expect(dismiss).not.toHaveBeenCalled();
+
+    // And it stays cleared through the next ladder the daemon sends, which on a live page
+    // is a second or two away. A badge that came straight back would be no button at all.
+    overlay.show([ladder()]);
+    expect(overlay.__nodesForTests()).toHaveLength(0);
+    overlay.destroy();
+  });
+
+  it("clears one badge on a page wearing two", () => {
+    playerOnPage(1280, 720);
+    playerOnPage(400, 300);
+    const overlay = new Overlay({ download: vi.fn(), dismiss: vi.fn() });
+    const long = ladder({ id: "a", durationSecs: 4000 });
+    const short = ladder({ id: "b", durationSecs: 90 });
+    overlay.show([long, short]);
+    expect(overlay.__nodesForTests()).toHaveLength(2);
+
+    overlay.__nodesForTests()[0]!.querySelector<HTMLButtonElement>(".clear")!.click();
+    expect(overlay.__nodesForTests()).toHaveLength(1);
+    overlay.destroy();
+  });
+
+  it("comes back for the next video, because the player is not the video", () => {
+    // The reason this is keyed by the candidate. On a single-page app the `<video>`
+    // outlives what is playing in it, so clearing one badge must not silence the player
+    // for everything it goes on to show.
+    playerOnPage();
+    const overlay = new Overlay({ download: vi.fn(), dismiss: vi.fn() });
+    overlay.show([ladder({ id: "watching-this" })]);
+    overlay.__nodesForTests()[0]!.querySelector<HTMLButtonElement>(".clear")!.click();
+    expect(overlay.__nodesForTests()).toHaveLength(0);
+
+    overlay.show([ladder({ id: "watching-that" })]);
+    expect(overlay.__nodesForTests()).toHaveLength(1);
+    overlay.destroy();
+  });
+
+  it("puts the way out beside the offer, not inside it", () => {
+    // A button nested in a button is not something a browser will render or a screen
+    // reader will read, so the two are siblings in a row that is anchored as one.
+    playerOnPage();
+    const overlay = new Overlay({ download: vi.fn(), dismiss: vi.fn() });
+    overlay.show([ladder()]);
+
+    const [node] = overlay.__nodesForTests();
+    const cluster = node!.querySelector(".cluster")!;
+    expect(node!.firstElementChild, "placement measures the whole row").toBe(cluster);
+    expect(cluster.querySelector(".badge .clear")).toBeNull();
+    expect([...cluster.children].map((child) => child.className)).toEqual(["badge", "clear"]);
+    overlay.destroy();
+  });
+});
+
 describe("the overlay in a page", () => {
   it("cannot be read by the page it is drawn on", () => {
     const overlay = new Overlay({ download: vi.fn(), dismiss: vi.fn() });

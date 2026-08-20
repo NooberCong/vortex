@@ -20,6 +20,8 @@
 
 #![forbid(unsafe_code)]
 
+mod child;
+
 pub mod crypto;
 pub mod dash;
 pub mod drm;

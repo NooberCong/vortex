@@ -103,25 +103,106 @@ button {
 
 /* ── Collapsed: the badge on the player ──────────────────────────────────── */
 
+/*
+ * **The pill is the cluster, not the badge.**
+ *
+ * The chrome — border, radius, surface, shadow — lives here rather than on the button
+ * inside it, so the offer and the `×` are two segments of one object with a rule between
+ * them instead of two controls that happen to be near each other. They cannot be one
+ * button: a `<button>` inside a `<button>` is not something a browser renders.
+ *
+ * This is also what `.spot > *` positions, so it is what hangs from the player's top-right
+ * corner, and what placement measures — which is what keeps the whole thing inside the
+ * player rather than half over the page beside it.
+ *
+ * `align-items: stretch`, so the `×` is full pill height and its hover reads as part of
+ * the pill. No `overflow: hidden` to round the ends: that would clip the focus ring off
+ * both segments, and the ends are rounded by the segments themselves instead.
+ */
+.cluster {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  transition:
+    transform var(--quick) var(--ease),
+    border-color var(--quick) var(--ease);
+}
+.cluster:hover {
+  transform: translateY(-1px);
+  border-color: var(--rule-strong);
+}
+.cluster.queued,
+.cluster.queued:hover {
+  transform: none;
+  border-color: var(--rule);
+}
+
+/*
+ * Clearing one badge is not the same decision as switching a site off, and it does not
+ * look like one: a hairline segment on the end of the pill, achromatic, quiet until it is
+ * pointed at. It should be findable without advertising itself.
+ */
+.clear {
+  --arm: 9px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  border-left: 1px solid var(--rule);
+  border-radius: 0 999px 999px 0;
+  color: var(--text-faint);
+  transition:
+    color var(--quick) var(--ease),
+    background var(--quick) var(--ease);
+}
+.clear:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+/*
+ * The cross is **drawn, not typed**.
+ *
+ * A `×` character cannot be centred by centring its box. U+00D7 carries all of its ink
+ * above the baseline — 8px up and 1px up at 15px in Instrument Sans — so its ink centre is
+ * 4.5px above the baseline while the line box it is aligned by has its centre 6px above.
+ * The glyph lands 1.5px low, which on a 26px button is not subtle. Nudging it back up
+ * would be a number true of exactly one font, and this shadow root falls back to
+ * `system-ui` whenever the webfont has not loaded.
+ *
+ * Two rotated bars in one grid cell have no metrics to be wrong about, and they take
+ * `currentColor`, so the hover transition above still drives them.
+ */
+.clear::before,
+.clear::after {
+  content: "";
+  grid-area: 1 / 1;
+  width: var(--arm);
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+}
+.clear::before {
+  transform: rotate(45deg);
+}
+.clear::after {
+  transform: rotate(-45deg);
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
   gap: var(--s2);
   padding: 5px var(--s3);
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
+  /* Rounded on its own left end: the cluster carries the shape, but a focus ring and a
+     future hover tint both need this segment to know where the pill stops. */
+  border-radius: 999px 0 0 999px;
   font-size: var(--t-meta);
   font-weight: 500;
   white-space: nowrap;
-  transition:
-    transform var(--quick) var(--ease),
-    border-color var(--quick) var(--ease);
-}
-.badge:hover {
-  transform: translateY(-1px);
-  border-color: var(--rule-strong);
 }
 .badge .arrow {
   font-size: 14px;
@@ -138,10 +219,6 @@ button {
 .badge.queued {
   cursor: default;
 }
-.badge.queued:hover {
-  transform: none;
-  border-color: var(--rule);
-}
 
 /* The corner pill is the same badge at reading size: it is not sitting on a video, so it
    has no player to stay out of the way of. */
@@ -151,6 +228,11 @@ button {
 }
 .pill .arrow {
   font-size: 15px;
+}
+/* The corner pill is at reading size, so its end segment has to be too. */
+.pill-spot .clear {
+  --arm: 10px;
+  width: 30px;
 }
 
 /* ── Expanded: the ladder, and every rung is a button ─────────────────────── */

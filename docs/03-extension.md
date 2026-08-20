@@ -306,15 +306,26 @@ when a real, downloadable stream is confirmed. One badge per player, not one per
 
 ```
  ┌───────────────────────────────────────────────┐
- │                        ╭────────────────────╮ │
- │                        │ ↓ Download · 1080p │ │
- │                        ╰────────────────────╯ │
+ │                   ╭────────────────────╮ ╭─╮ │
+ │                   │ ↓ Download · 1080p │ │×│ │
+ │                   ╰────────────────────╯ ╰─╯ │
  │                                               │
  │                  ▶                            │
  │                                               │
  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━   │
  └───────────────────────────────────────────────┘
 ```
+
+The `×` on the end takes the badge off **this video until the page is reloaded**. It is a
+sibling of the badge and not a control inside it, because a button nested in a button is
+not something a browser renders — but the two are **one pill**, divided by a hairline: the
+border, radius and surface belong to the row, not to either button. Placement measures that
+row, which is what keeps the whole control inside the player rather than half over the page.
+
+The cross is drawn by the stylesheet rather than typed. `×` (U+00D7) carries all its ink
+above the baseline, so centring its box leaves the glyph about 1.5 px low, and the
+correction would be a number true of one font — this shadow root falls back to `system-ui`
+whenever the webfont has not loaded. Two rotated bars have no metrics to be wrong about.
 
 Which ladder belongs to which player is decided in the page, because `webRequest` sees a
 manifest URL and a tab id and no element (`src/overlay/anchor.ts`):
@@ -389,7 +400,14 @@ Rules that keep it from being obnoxious:
   the pointer to come back to the player — so a page is not permanently wearing a button.
   It stays reachable by Tab the whole time (`opacity`, never `visibility`), and stays up on
   a device with no hover at all.
-- Dismissible per-origin, persistently, from the overlay itself.
+- **Two ways out, and they are not the same size.** The `×` on the badge clears it for one
+  video until the page is reloaded, in memory, telling the daemon nothing. *Not on this
+  site* is per-origin, persistent, and reaches the daemon. Most of the time what someone
+  wants is the first one — the badge is in the way *right now* — and an overlay that offers
+  only the permanent opt-out collects opt-outs it did not deserve.
+- The `×` is keyed by the candidate, not by the player. On a single-page app the `<video>`
+  outlives what plays in it, so keying on the element would turn "hide this one" into
+  "silence this player for everything it shows next".
 - Never covers player controls: it sits in the corner opposite them, and in fullscreen the
   host moves **into** the fullscreen element — the top layer paints that subtree and
   nothing else, so an overlay parented to `<html>` is simply not on the screen, whatever

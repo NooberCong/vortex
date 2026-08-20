@@ -1,0 +1,11 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "externalBin": [
+      "binaries/vortexd",
+      "binaries/vortex-host",
+      "binaries/yt-dlp",
+      "binaries/qjs"
+    ]
+  }
+}

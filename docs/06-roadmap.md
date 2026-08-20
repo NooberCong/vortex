@@ -114,6 +114,33 @@ naive implementations fail, so it is the acceptance criterion.
 * **NSIS, not WiX.** Tauri's MSI is per-machine only, and "no admin rights at install time"
   is a constraint from 01 §Process model rather than a packaging preference. An MSI for the
   enterprise path can be added later; it cannot be the default.
+* **The login entry is written by the installer, not left to the daemon.** An install is
+  preceded by an uninstall — Tauri's NSIS runs the old uninstaller before copying anything,
+  on an update and on a reinstall alike — and that hook's `--unregister` takes the entry
+  with it. Restoring it only at the daemon's next start is a rule with a hole exactly the
+  shape of the bug: restart the machine after an update and the entry that would have
+  started the daemon is the entry the daemon would have written. So `--register` sets it
+  from `settings.json`, and from the default — on — when there is no file yet. The daemon
+  still reconciles, and now compares against `autostart_enabled()` rather than its own
+  memory, so an entry deleted by anything else is repaired the next time a client connects.
+* **`vortexd.exe` is a windowless binary, and the two commands that print borrow the
+  caller's console.** Explorer starts a console-subsystem program with a console, so the
+  login entry — the one thing that starts the daemon without a parent to hide it, since
+  `vortex-ipc` spawns with `CREATE_NO_WINDOW` — was the one path that put a black window on
+  the desktop for the whole session. The subsystem is the fix; `AttachConsole` in `main` is
+  the part that keeps `vortexd --register` readable to someone who typed it, and leaves the
+  installer's pipe alone so `ExecToLog` still has a log to write. Debug builds keep their
+  console.
+* **The login entry starts the app in tray mode, not the daemon.** The daemon is what has to
+  be running and for a while the entry named it — correct, and indistinguishable from
+  failure: a headless process leaves nothing in the tray, nothing in the taskbar and no
+  window, so the first thing a user does after signing in is check whether Vortex started,
+  find no evidence, and conclude it did not. `vortex-app --tray` opens no window either, but
+  it leaves an icon and a throughput tooltip, and it starts the daemon on the way up the
+  same way a double-click does. One entry, both processes, and quitting from the tray still
+  leaves the daemon downloading. The cost is a webview resident for the session; the
+  alternative was a second tray implementation inside the daemon, kept in sync with this
+  one, with no macOS or Linux equivalent.
 * **The extension declares its own key, so its id is arithmetic rather than an accident.**
   Chromium derives an id from the public key and, absent one, from the folder an unpacked
   build was loaded from — different on every machine, so nothing could be registered ahead
@@ -125,10 +152,16 @@ naive implementations fail, so it is the acceptance criterion.
 **Not built yet:** EV code signing, the updater (minisign, pinned endpoint), store
 submissions, crash reporting and opt-in telemetry.
 
-yt-dlp now ships as a third sidecar, fetched and checksum-verified at bundle time
-(`scripts/ytdlp.mjs`). What is still missing is its *own release channel* — today it is
-pinned to whatever `latest` was when the installer was built, and updating it means shipping
-an app release, which is exactly what a weekly-breaking extractor cannot wait for.
+Three sidecars now ship alongside the two cargo builds, each fetched and checksum-verified
+at bundle time: **yt-dlp** (`scripts/ytdlp.mjs`), the **qjs** JavaScript engine it borrows
+for YouTube's player challenge (`scripts/qjs.mjs`), and **ffmpeg** (`scripts/ffmpeg.mjs`),
+which is ~115 MB and the reason the installer is what it is. macOS gets the first two; see
+04 §Muxing for why its ffmpeg is left to `PATH`.
+
+What is still missing is yt-dlp's *own release channel* — today it is pinned to whatever
+`latest` was when the installer was built, and updating it means shipping an app release,
+which is exactly what a weekly-breaking extractor cannot wait for. The same now goes for
+qjs, though it moves far more slowly.
 
 **Total: ~20 weeks solo.** Roughly 5 months for a credible product, which is the honest
 number for this category. Phases 1–2 can compress if the engine is the only focus; phases

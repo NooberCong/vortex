@@ -100,7 +100,6 @@ mod tests {
     fn placeholder(ids: &[&str]) -> Registration {
         Registration {
             host: PathBuf::from(r"%INSTALL_DIR%\vortex-host.exe"),
-            daemon: PathBuf::from(r"%INSTALL_DIR%\vortexd.exe"),
             manifest_dir: PathBuf::from("."),
             chromium_ids: ids.iter().map(|id| (*id).to_owned()).collect(),
             root: PathBuf::from("."),

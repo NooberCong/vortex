@@ -19,6 +19,8 @@ url = { workspace = true }
 futures = { workspace = true }
 bytes = { workspace = true }
 hex = { workspace = true }
+# The extractor is handed the page's cookies as a file rather than as argv (`ytdlp.rs`).
+tempfile = "3"
 
 quick-xml = "0.41"
 aes = "0.9"

@@ -89,6 +89,31 @@ fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
+/// Whether the login entry should exist, answered from the file alone.
+///
+/// `--register` asks this before any daemon has run, which is why it does not go through
+/// [`SettingsFile`]: loading writes the file when it is missing, and a `--register` that
+/// only means to look should not leave a settings file behind on a machine where the user
+/// has not yet opened Vortex.
+///
+/// No file means a first install, and the answer there is the shipped default — on, which
+/// is what the toggle in Settings shows from the first time it is opened.
+pub fn autostart_intent(path: &Path) -> bool {
+    let fallback = Settings::default().autostart;
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return fallback;
+    };
+    match serde_json::from_str::<Settings>(&text) {
+        Ok(settings) => settings.autostart,
+        Err(e) => {
+            // Onto the installer's log, where someone reading it can see why an install
+            // turned the login entry on despite a file that says otherwise.
+            tracing::warn!(path = %path.display(), "settings.json is not valid: {e} — assuming the default");
+            fallback
+        }
+    }
+}
+
 fn defaults() -> Settings {
     Settings {
         download_dir: crate::paths::default_download_dir().to_string_lossy().into_owned(),
@@ -165,6 +190,29 @@ mod tests {
             .category_dirs
             .insert("Video".into(), absolute.into());
         assert_eq!(dest_dir(&settings, Category::Video), PathBuf::from(absolute));
+    }
+
+    /// What `--register` reads during an install, when there may be no daemon, no file and
+    /// no user to ask.
+    #[test]
+    fn the_login_entry_defaults_to_on_and_the_file_is_the_only_thing_that_turns_it_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+
+        // A first install: on, and looking must not create the file.
+        assert!(autostart_intent(&path));
+        assert!(!path.exists());
+
+        std::fs::write(&path, r#"{"autostart": false}"#).unwrap();
+        assert!(!autostart_intent(&path));
+
+        std::fs::write(&path, r#"{"autostart": true}"#).unwrap();
+        assert!(autostart_intent(&path));
+
+        // A file someone edited badly is not a reason to leave a machine that used to
+        // start Vortex no longer starting it.
+        std::fs::write(&path, "{ not json").unwrap();
+        assert!(autostart_intent(&path));
     }
 
     #[test]

@@ -61,9 +61,9 @@ fn autostart_path() -> Option<PathBuf> {
     })
 }
 
-/// `RunAtLoad` and nothing else: no `KeepAlive`, because a daemon `launchd` restarts on
+/// `RunAtLoad` and nothing else: no `KeepAlive`, because a program `launchd` restarts on
 /// every exit cannot be quit, and quitting Vortex is something a user is allowed to do.
-fn macos_plist(daemon: &Path) -> String {
+fn macos_plist(program: &Path) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -74,29 +74,33 @@ fn macos_plist(daemon: &Path) -> String {
     <key>ProgramArguments</key>
     <array>
         <string>{}</string>
+        <string>{}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
 </dict>
 </plist>
 "#,
-        xml_escape(&daemon.to_string_lossy())
+        xml_escape(&program.to_string_lossy()),
+        crate::autostart::TRAY_FLAG
     )
 }
 
-/// `NoDisplay` because this is a background process with a window of its own to open, not
-/// an application the session should be showing in a startup list as though it had a UI.
-fn xdg_desktop(daemon: &Path) -> String {
+/// `NoDisplay` because a startup list is for things the user might want to launch, and this
+/// entry launches Vortex into the tray with no window — the menu entry for opening it is
+/// the application's own, installed by the package.
+fn xdg_desktop(program: &Path) -> String {
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name=Vortex\n\
-         Comment=The Vortex download daemon\n\
-         Exec=\"{}\"\n\
+         Comment=The Vortex download manager\n\
+         Exec=\"{}\" {}\n\
          Terminal=false\n\
          NoDisplay=true\n\
          X-GNOME-Autostart-enabled=true\n",
-        daemon.display()
+        program.display(),
+        crate::autostart::TRAY_FLAG
     )
 }
 
@@ -104,7 +108,7 @@ fn xml_escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-pub fn set_autostart(enabled: bool, daemon: &Path) -> io::Result<()> {
+pub fn set_autostart(enabled: bool, program: &Path) -> io::Result<()> {
     let path = autostart_path()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory"))?;
     if !enabled {
@@ -115,9 +119,9 @@ pub fn set_autostart(enabled: bool, daemon: &Path) -> io::Result<()> {
         };
     }
     let body = if cfg!(target_os = "macos") {
-        macos_plist(daemon)
+        macos_plist(program)
     } else {
-        xdg_desktop(daemon)
+        xdg_desktop(program)
     };
     manifest::write_if_changed(&path, &body).map(|_| ())
 }
@@ -134,14 +138,15 @@ mod tests {
     fn a_path_with_xml_metacharacters_cannot_break_out_of_the_plist() {
         // A home directory may contain `&`. A plist that is not well-formed is not
         // ignored by `launchd`, it is a startup that silently never happens.
-        let plist = macos_plist(Path::new("/Users/a&b/vortexd"));
-        assert!(plist.contains("<string>/Users/a&amp;b/vortexd</string>"), "{plist}");
+        let plist = macos_plist(Path::new("/Users/a&b/Vortex.app/Contents/MacOS/vortex-app"));
+        assert!(plist.contains("<string>/Users/a&amp;b/"), "{plist}");
+        assert!(plist.contains("<string>--tray</string>"), "{plist}");
     }
 
     #[test]
     fn the_desktop_entry_quotes_the_path_and_stays_out_of_the_menu() {
-        let entry = xdg_desktop(Path::new("/home/a b/vortexd"));
-        assert!(entry.contains("Exec=\"/home/a b/vortexd\""), "{entry}");
+        let entry = xdg_desktop(Path::new("/home/a b/vortex-app"));
+        assert!(entry.contains("Exec=\"/home/a b/vortex-app\" --tray"), "{entry}");
         assert!(entry.contains("NoDisplay=true"));
     }
 }

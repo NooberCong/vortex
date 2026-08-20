@@ -82,8 +82,6 @@ pub const GECKO_ID: &str = "vortex@vortex.download";
 pub struct Registration {
     /// Absolute path to `vortex-host` — the program the browser will actually start.
     pub host: PathBuf,
-    /// Absolute path to `vortexd`, for the login entry.
-    pub daemon: PathBuf,
     /// Where generated manifests are kept on Windows, whose registration is a registry
     /// value holding a path. Unix has no such indirection: the manifest goes in the
     /// browser's own directory, and this is unused there.
@@ -101,8 +99,8 @@ pub struct Registration {
 }
 
 impl Registration {
-    /// The installed layout: `vortex-host` and `vortexd` sit beside whoever is asking,
-    /// and generated manifests live under the per-user data directory.
+    /// The installed layout: everything Vortex ships sits beside whoever is asking, and
+    /// generated manifests live under the per-user data directory.
     ///
     /// Beside-the-caller rather than `PATH` for the same reason `vortex_ipc::start` does
     /// it: `PATH` is a way for something else to be started instead, and a client and a
@@ -120,7 +118,6 @@ impl Registration {
             .to_path_buf();
         Ok(Self {
             host: dir.join(exe("vortex-host")),
-            daemon: dir.join(exe("vortexd")),
             manifest_dir: data_dir.join("native-messaging"),
             chromium_ids: chromium_ids(),
             root: default_root()?,
@@ -278,7 +275,6 @@ mod tests {
     pub(crate) fn sample(root: &Path) -> Registration {
         Registration {
             host: PathBuf::from("/nowhere/vortex-host"),
-            daemon: PathBuf::from("/nowhere/vortexd"),
             manifest_dir: root.join("manifests"),
             chromium_ids: vec!["a".repeat(32)],
             root: root.to_path_buf(),

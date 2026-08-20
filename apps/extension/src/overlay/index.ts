@@ -2,8 +2,8 @@
  * The page overlay (03 §The overlay).
  *
  * A small badge in the **top-right corner of the player itself**, which opens the ladder.
- * Four rules keep it from being the obnoxious thing every other video downloader ships,
- * and all four are enforced here rather than left to judgement:
+ * Five rules keep it from being the obnoxious thing every other video downloader ships,
+ * and all five are enforced here rather than left to judgement:
  *
  * - **It appears only on confirmed streams.** The caller only ever passes candidates the
  *   daemon has already parsed and reached. Never on a hunch.
@@ -16,6 +16,11 @@
  *   downloading a lecture does not want the 4 GB rung, and defaulting to the maximum is
  *   how a download manager teaches people to distrust its defaults.
  * - **It can be switched off for a site, from itself, permanently.**
+ * - **It can be cleared for one video, with no decision attached.** The `×` beside the
+ *   badge takes it off *this* video until the page is reloaded. That is a different act
+ *   from switching the site off, and it is the one people actually want most of the time:
+ *   the badge is in the way right now. Making them choose "never here again" to get rid
+ *   of something once is how an overlay earns a permanent opt-out it did not deserve.
  *
  * When nothing on the page can be paired to a player — an audio-only stream, a manifest
  * with no `<video>` to hang it on — the overlay falls back to the one thing it can always
@@ -107,6 +112,19 @@ export class Overlay {
   private spots: Spot[] = [];
   /** The last ladder the background sent, so a late-arriving player can be paired to it. */
   private candidates: MediaCandidate[] = [];
+  /**
+   * Candidates the user has cleared, by `id`, for as long as this page lives.
+   *
+   * In memory and nowhere else: a reload builds a new content script with an empty set,
+   * which is exactly the promise the `×` makes. The site-wide opt-out is the one that
+   * persists, and it is a different button in a different place for that reason.
+   *
+   * Keyed by the candidate and not by the player, because on a single-page app the
+   * `<video>` outlives the video in it. Keying on the element would mean clearing one
+   * badge silenced every video that player went on to show — a permanent decision taken
+   * by someone who asked for a temporary one.
+   */
+  private readonly cleared = new Set<string>();
   /** The players paired at the last `show`, so the tick can tell when the page changed. */
   private tracked: HTMLVideoElement[] = [];
   private pointer = { x: -1, y: -1 };
@@ -154,13 +172,15 @@ export class Overlay {
 
   /** Shows a badge on every player it can pair, or hides the overlay when there is none. */
   show(candidates: MediaCandidate[]): void {
-    this.candidates = candidates;
+    // Filtered once, here, so every path below — the repair tick, a late-pairing player,
+    // a fresh ladder from the daemon — inherits it without knowing it exists.
+    this.candidates = candidates.filter((candidate) => !this.cleared.has(candidate.id));
     const players = playersOnPage();
     this.tracked = usablePlayers(players).map((player) => player.video);
 
-    const pairs = pair(candidates, players);
+    const pairs = pair(this.candidates, players);
     if (pairs.length > 0) this.anchored(pairs);
-    else this.floating(candidates);
+    else this.floating(this.candidates);
 
     if (this.spots.length === 0) {
       this.hide();
@@ -286,7 +306,25 @@ export class Overlay {
     spot.node.replaceChildren(spot.state.expanded ? this.panel(spot) : this.badge(spot));
   }
 
+  /**
+   * The collapsed badge: what it will fetch, and the `×` that takes it away.
+   *
+   * Two sibling buttons rather than one with a nested control, because a `<button>` inside
+   * a `<button>` is not something a browser renders. They are still **one pill**: the
+   * chrome is on this element and the two are segments of it, divided by a hairline. The
+   * alternative — a second round button floating beside the first — is two controls that
+   * happen to be near each other, which is not what a way out of a badge should look like.
+   *
+   * `queued` is carried here as well as on the button because the lift on hover belongs to
+   * the pill now, and a pill reporting a queued job should not lift.
+   */
   private badge(spot: Spot): HTMLElement {
+    const cluster = el("div", spot.queued ? "cluster queued" : "cluster");
+    cluster.append(this.offer(spot), this.clear(spot));
+    return cluster;
+  }
+
+  private offer(spot: Spot): HTMLElement {
     const button = el("button", spot.anchor ? "badge" : "badge pill");
     button.type = "button";
     button.setAttribute("aria-expanded", "false");
@@ -306,6 +344,30 @@ export class Overlay {
       spot.state.expanded = true;
       this.render(spot);
       spot.node.querySelector<HTMLElement>(".rung")?.focus();
+    });
+    return button;
+  }
+
+  /**
+   * Gone from this video until the page is reloaded.
+   *
+   * Deliberately not routed through `hooks.dismiss`: that is the site-wide opt-out, it
+   * reaches the daemon, and it is remembered. This one costs nothing to undo and so it
+   * asks for nothing — no confirmation, no explanation of what it will mean later.
+   */
+  private clear(spot: Spot): HTMLElement {
+    const button = el("button", "clear");
+    button.type = "button";
+    // No text: the cross is two bars drawn by the stylesheet, because a `×` glyph cannot
+    // be optically centred by centring its box. The name comes from `aria-label`.
+    button.title = "Hide this until the page is reloaded";
+    button.setAttribute("aria-label", "Hide the download button for this video");
+    button.addEventListener("click", () => {
+      this.cleared.add(spot.state.candidate.id);
+      // Back through `show`, so a page with two players loses one badge and keeps the
+      // other, and a page with one loses the overlay entirely — both by the same rule
+      // that put them there.
+      this.show(this.candidates);
     });
     return button;
   }

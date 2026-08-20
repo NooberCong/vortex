@@ -182,12 +182,14 @@ pub async fn run(
     let args = arguments(plan, work_dir, output);
     tracing::debug!(?args, "muxing");
 
-    let mut child = Command::new(ffmpeg.path())
+    let mut command = Command::new(ffmpeg.path());
+    command
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    let mut child = crate::child::windowless(&mut command)
         .spawn()
         .map_err(|e| {
             tracing::warn!("ffmpeg would not start: {e}");

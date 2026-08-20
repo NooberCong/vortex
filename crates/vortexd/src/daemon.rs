@@ -103,9 +103,6 @@ pub struct Daemon {
     stopping: Option<oneshot::Sender<()>>,
     /// See [`Config::os_integration`].
     os_integration: bool,
-    /// Where this daemon is, for the login entry — which has to name an absolute path, and
-    /// the only one that is certainly right is our own.
-    daemon_path: PathBuf,
     /// What the login entry was last set to. `None` until the first reconcile, so the
     /// first `apply_settings` always writes and every one after it is a comparison.
     autostart: Option<bool>,
@@ -132,7 +129,6 @@ impl Daemon {
             next_tick: Instant::now() + TICK,
             stopping: None,
             os_integration: config.os_integration,
-            daemon_path: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("vortexd")),
             autostart: None,
         })
     }
@@ -848,11 +844,23 @@ impl Daemon {
     /// Nothing is started or stopped here. Turning autostart on does not launch a second
     /// daemon, and turning it off does not kill the one running this code.
     fn apply_autostart(&mut self, enabled: bool) {
-        if !self.os_integration || self.autostart == Some(enabled) {
+        if !self.os_integration {
+            return;
+        }
+        // What we last asked for is not the same question as what the machine has. An
+        // entry removed behind our back — an update's uninstall step, a startup-item
+        // cleaner, a user with `regedit` open — would otherwise stay removed until the
+        // daemon next started, and a daemon that does not start is the one case where
+        // that never happens. So the fact is read too, and only agreement is a skip.
+        //
+        // This is a registry read on a path that runs when a client connects or the
+        // settings change, not on a timer: an idle daemon still touches nothing (01
+        // §Process model).
+        if self.autostart == Some(enabled) && vortex_setup::autostart_enabled() == enabled {
             return;
         }
         self.autostart = Some(enabled);
-        match vortex_setup::set_autostart(enabled, &self.daemon_path) {
+        match vortex_setup::set_autostart(enabled) {
             Ok(()) => tracing::info!(enabled, "login entry"),
             // Worth a line and nothing more. A user whose registry hive is read-only has a
             // larger problem than this setting, and refusing to run is not a help.

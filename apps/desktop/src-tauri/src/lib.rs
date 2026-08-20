@@ -9,7 +9,8 @@
 //!
 //! 1. speaks the named-pipe protocol to the daemon ([`link`]);
 //! 2. owns the frameless window's chrome — backdrop, geometry, theme ([`chrome`]);
-//! 3. keeps a tray icon alive so the aggregate readout survives a hidden window;
+//! 3. keeps a tray icon alive so the aggregate readout survives a hidden window — and, when
+//!    the login entry starts it with `--tray`, a window that never opened;
 //! 4. relays exactly one thing in each direction, with no model of its own in between.
 //!
 //! Everything else — what a row looks like, what a number rounds to, when a sheet opens —
@@ -32,6 +33,13 @@ const EVENT: &str = "vortex://event";
 /// `{ connected: boolean }`. Separate from [`EVENT`] because it is about the wire rather
 /// than about a job, and the window reacts to it differently.
 const LINK: &str = "vortex://link";
+/// How the login entry asks for a tray icon and no window.
+///
+/// The same spelling lives in `vortex_setup::autostart::TRAY_FLAG`, which is the code that
+/// writes the entry. Neither crate depends on the other — this one is a view over the
+/// daemon and that one writes registry keys — so the string is in both places, and each
+/// says so.
+const TRAY_FLAG: &str = "--tray";
 
 struct Bridge {
     primary: Arc<Link>,
@@ -98,6 +106,13 @@ pub fn run() {
         )
         .init();
 
+    // A person who starts Vortex means to look at it. The login entry does not: it wants
+    // the daemon up and an icon in the tray, and a window unfolding by itself while someone
+    // is still signing in is exactly what nobody asked for. Everything else — the webview,
+    // the link to the daemon, the tray — is identical either way, so this is one bool and
+    // the two places that would otherwise show the window.
+    let into_the_tray = std::env::args().skip(1).any(|arg| arg == TRAY_FLAG);
+
     let mut builder = tauri::Builder::default();
 
     #[cfg(desktop)]
@@ -121,8 +136,8 @@ pub fn run() {
                 )
                 .build(),
         )
-        .on_page_load(|webview, payload| {
-            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+        .on_page_load(move |webview, payload| {
+            if !into_the_tray && payload.event() == tauri::webview::PageLoadEvent::Finished {
                 let _ = webview.window().show();
             }
         })
@@ -138,7 +153,7 @@ pub fn run() {
             toast::notify,
             tray::tooltip
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
             let sink: Arc<dyn Sink> = Arc::new(ToWebview(handle.clone()));
 
@@ -153,7 +168,12 @@ pub fn run() {
                 // was already maximised when it opened never sends a resize.
                 chrome::square_corners(&window.as_ref().window());
             }
-            chrome::show_when_loaded(&handle);
+            // The page still loads, hidden — a tray start pays the webview's cold start at
+            // sign-in so that opening the window later is instant, which is the same trade
+            // the hide-on-close path already makes.
+            if !into_the_tray {
+                chrome::show_when_loaded(&handle);
+            }
             tray::install(&handle)?;
             Ok(())
         })

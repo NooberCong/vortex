@@ -24,9 +24,11 @@
   ; Registers every browser it can, reports the rest, and returns non-zero only if none
   ; could be reached at all. Its output goes to the installer log.
   ;
-  ; The login entry is deliberately *not* set here: it follows `settings.json`, and a
-  ; fresh install has no settings file until the daemon writes one. Installing a startup
-  ; item the user was never asked about is how a download manager earns its reputation.
+  ; This also sets the login entry, from `settings.json` when there is one and from the
+  ; default — on — when there is not. It has to happen here rather than at the daemon's
+  ; next start: the uninstall hook below runs first on every update and every reinstall,
+  ; and it takes the entry with it. Restoring it only when a daemon runs would mean a
+  ; machine restarted straight after an update comes back with nothing running.
   nsExec::ExecToLog '"$INSTDIR\vortexd.exe" --register'
   Pop $0
 !macroend

@@ -423,7 +423,9 @@ fn run(ffmpeg: &Path, args: &[String]) {
         .args(args)
         .status()
         .expect("running ffmpeg");
-    assert!(status.success(), "ffmpeg failed: {args:?}");
+    // Which ffmpeg, not just which arguments. A machine can have several and the fixtures
+    // need an encoder, so "unknown encoder libx264" is a sentence about the binary.
+    assert!(status.success(), "ffmpeg failed: {} {args:?}", ffmpeg.display());
 }
 
 /// What ffprobe says is inside a file. "Correct audio" is the acceptance criterion for the

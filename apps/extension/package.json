@@ -1,6 +1,6 @@
 {
   "name": "@vortex/extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Vortex capture layer — a sensor and a remote control, never a downloader.",

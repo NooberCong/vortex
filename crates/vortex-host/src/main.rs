@@ -15,6 +15,13 @@
 //! 2. **Never exceed 1 MB towards the browser.** That is a hard platform limit, and
 //!    tripping it kills the port silently.
 
+// Windowless on Windows. The browser starts this one, and it starts it as a console
+// program — which on a console-subsystem binary means a black window appearing over the
+// page for as long as the port is open. Nothing is lost: stdin and stdout are the pipes
+// the browser handed us and a subsystem does not change them, and everything this process
+// says for a human's benefit goes to stderr, which the browser writes to its own log.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod native;
 
 use tokio::io::AsyncWrite;

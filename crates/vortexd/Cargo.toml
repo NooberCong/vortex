@@ -29,6 +29,15 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2"
 
+# Only for the console handling in `main.rs` — the daemon is windowless on Windows, and the
+# commands that print have to find their way back to a terminal.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+] }
+
 [dev-dependencies]
 hostile-server = { path = "../../bench/hostile-server" }
 tempfile = "3"

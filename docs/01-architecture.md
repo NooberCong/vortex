@@ -7,7 +7,7 @@ Three processes. One owns state; the other two are clients.
 | Process | Lifetime | Owns | Can crash without loss? |
 |---|---|---|---|
 | **`vortexd`** | login → logout | Every job, every byte, every setting | No — this is the one that must not |
-| **`vortex-app`** (Tauri) | user opens/closes it | Nothing. Pure view + command sender | Yes |
+| **`vortex-app`** (Tauri) | sign-in → quit, or opened on demand | Nothing. Pure view + command sender | Yes |
 | **`vortex-host`** | spawned by the browser per profile | Nothing. Stateless relay | Yes |
 
 `vortexd` is a **user-session background process**, not a Windows Service. Deliberate:
@@ -19,6 +19,19 @@ Three processes. One owns state; the other two are clients.
 
 Autostart: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows, a LaunchAgent on
 macOS, an XDG autostart entry on Linux. All three are user-scoped and user-removable.
+
+What the entry starts is `vortex-app --tray`, not the daemon. `vortexd` is still the process
+that has to be running, and the app starts it on its way up (`vortex_ipc::connect_or_start`)
+exactly as a double-click does — but a headless daemon has nothing in the tray, nothing in
+the taskbar and no window, so a sign-in that worked and a sign-in that silently failed look
+identical. The app in tray mode opens no window either; it leaves an icon that says Vortex
+is there, with the aggregate throughput in its tooltip. Quitting it from the tray leaves the
+daemon running, which is what that menu item has always promised.
+
+Nothing flashes on the way. The window is created hidden and stays hidden in tray mode, and
+`vortexd.exe` is built windowless on Windows — otherwise Explorer, which starts a
+console-subsystem program with a console, would leave a black terminal on the desktop for
+the length of the session.
 
 **Idle behavior:** with no active jobs and no connected client, `vortexd` drops to a single
 IOCP/epoll wait and roughly 8 MB RSS. It does not poll. It does not phone home.
@@ -146,7 +159,8 @@ self-describing and sufficient to rebuild a job from nothing.
 | Extension identity | Manifest `key` field pins the extension ID across dev reloads and store publish, so host registration never breaks. |
 | Daemon → disk | Writes confined to configured download roots plus system temp. Server-supplied `Content-Disposition` filenames are sanitized: strip separators, reject reserved Windows device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`), cap each component at 255 UTF-8 bytes, strip trailing dots and spaces. |
 | Cookies in transit | Forwarded envelopes live in memory only, zeroized on completion, never written to `vortex.db` or logs. The tracing layer redacts `Cookie`, `Authorization`, and `Set-Cookie` by header name. |
-| Sidecars | `ffmpeg` and `yt-dlp` invoked with an explicit argv array, never a shell string. No format string is ever derived from an untrusted manifest. |
+| Cookies → extractor | One exception, and it is a file rather than a leak. An extraction gets a Netscape cookie jar in system temp, holding only what the browser would itself send to *that page's host*, deleted when the child exits (04 §yt-dlp). Never `--add-header Cookie:` — argv is readable by every process on the machine. |
+| Sidecars | `ffmpeg` and `yt-dlp` invoked with an explicit argv array, never a shell string. No format string is ever derived from an untrusted manifest. Spawned with `CREATE_NO_WINDOW` on Windows, so a probe never flashes a console over the page. |
 | Updates | minisign-signed, public key compiled in, Tauri updater with a pinned endpoint. |
 
 ---

@@ -94,12 +94,13 @@ const RUN_VALUE: &str = "Vortex";
 
 /// Quoted, because the path contains spaces on any normal install and an unquoted value is
 /// parsed by `CreateProcess`'s ambiguous rules — which will happily start `C:\Program.exe`
-/// instead, if someone has arranged for one to exist.
-fn run_command(daemon: &Path) -> String {
-    format!("\"{}\"", daemon.display())
+/// instead, if someone has arranged for one to exist. The flag sits outside the quotes,
+/// where an argument goes.
+fn run_command(program: &Path) -> String {
+    format!("\"{}\" {}", program.display(), crate::autostart::TRAY_FLAG)
 }
 
-pub fn set_autostart(enabled: bool, daemon: &Path) -> io::Result<()> {
+pub fn set_autostart(enabled: bool, program: &Path) -> io::Result<()> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (run, _) = hkcu.create_subkey(RUN_KEY)?;
     if !enabled {
@@ -109,7 +110,7 @@ pub fn set_autostart(enabled: bool, daemon: &Path) -> io::Result<()> {
             Err(e) => Err(e),
         };
     }
-    let wanted = run_command(daemon);
+    let wanted = run_command(program);
     if run.get_value::<String, _>(RUN_VALUE).is_ok_and(|v| v == wanted) {
         return Ok(());
     }
@@ -128,9 +129,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_run_command_is_quoted() {
-        let command = run_command(Path::new(r"C:\Program Files\Vortex\vortexd.exe"));
-        assert_eq!(command, r#""C:\Program Files\Vortex\vortexd.exe""#);
+    fn the_run_command_is_quoted_and_asks_for_the_tray() {
+        let command = run_command(Path::new(r"C:\Program Files\Vortex\vortex-app.exe"));
+        assert_eq!(command, r#""C:\Program Files\Vortex\vortex-app.exe" --tray"#);
     }
 
     #[test]
