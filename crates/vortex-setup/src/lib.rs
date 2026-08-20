@@ -62,7 +62,16 @@ pub const HOST_NAME: &str = "io.vortex.host";
 ///
 /// `VORTEX_EXTENSION_ID` (comma-separated) adds ids at run time without a rebuild — for a
 /// build made somewhere else, or a store id being tried before it is committed here.
-pub const CHROMIUM_IDS: &[&str] = &["lbapnpokpngacdfbhhmgjckoilhfkjia"];
+pub const CHROMIUM_IDS: &[&str] = &[
+    // The development build, from the key in `apps/extension/identity.ts`.
+    "lbapnpokpngacdfbhhmgjckoilhfkjia",
+    // The Chrome Web Store listing, assigned when the item was created. A store build
+    // ships no key, so this is the id every user who installs from the listing will
+    // have — and until it is here, `vortexd --register` writes a host manifest whose
+    // `allowed_origins` does not name them and the connection is refused. The symptom
+    // is the quiet one the popup now reports as "not installed".
+    "nififgnkdkmlnnnfiillfdakkklofgol",
+];
 
 /// What the extension is on the Gecko side. Fixed by `browser_specific_settings.gecko.id`
 /// in `apps/extension/wxt.config.ts`, so unlike the Chromium ids it is knowable now.
