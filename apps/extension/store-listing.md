@@ -14,6 +14,79 @@ Privacy policy URL: `https://github.com/NooberCong/vortex/blob/main/PRIVACY.md`
 
 ---
 
+## Product details
+
+**Category:** Workflow & Planning. Not Entertainment — the package contains a
+download manager and nothing else, and filing it beside media extensions invites
+the review it was built to avoid.
+
+**Language:** English (United States).
+
+**Homepage URL:** `https://github.com/NooberCong/vortex`
+**Support URL:** `https://github.com/NooberCong/vortex/issues`
+**Official URL:** leave as None. It requires Search Console ownership of the
+domain, and a repository path cannot be verified.
+
+**Mature content:** No.
+
+### Description
+
+```
+Vortex is a download manager for people whose downloads are slow, or break.
+
+This extension is the browser half. It notices a download starting, hands it to
+the Vortex app running on your computer, and gets out of the way. The app does
+the fetching.
+
+REQUIRES THE VORTEX DESKTOP APP — free, open source, Windows, macOS and Linux.
+This extension does nothing on its own.
+Get it: https://github.com/NooberCong/vortex/releases/latest
+
+WHAT IT DOES
+- Parallel transfers: one file, many connections at once
+- Real resume: an interrupted download continues where it stopped, including
+  after a reboot or a crash
+- A queue that survives a restart
+- Files behind a login still download. The request is handed over with the
+  headers and cookies your browser would have sent, so a transfer that needs
+  your session still works
+- An expired link is renewed from the page it came from instead of failing
+
+HOW IT WORKS
+When your browser starts a download, the extension checks that the Vortex app
+is actually answering, passes the request to it, and cancels the browser's own
+copy so the file is not fetched twice. If the app is not running, nothing is
+taken over and your browser downloads exactly as it always did. That rule is
+deliberate: a download cancelled for an app that never picks it up is a file
+you have simply lost.
+
+PRIVACY
+There is no Vortex server and no account, because there is nowhere to send
+anything. Nothing leaves your machine except to the app you installed, over a
+local channel. No analytics, no tracking, no ads.
+Policy: https://github.com/NooberCong/vortex/blob/main/PRIVACY.md
+
+OPEN SOURCE
+Every line, including this extension: https://github.com/NooberCong/vortex
+
+Subscription services that use DRM are excluded in the extension's manifest.
+On those sites it is never loaded and takes nothing over.
+```
+
+### Graphic assets
+
+- **Store icon:** `apps/extension/public/icon/128.png` — 128x128 PNG, already
+  the right size and shape.
+- **Screenshots:** at least one, 1280x800 or 640x400, JPEG or 24-bit PNG **with
+  no alpha channel**. The popup is 380 px wide, so it has to be composed onto
+  the canvas rather than cropped to it.
+- **Promo tiles and video:** skip. They matter for featuring, not for approval.
+
+Nothing in a screenshot may show a capability this package does not have.
+A screenshot taken on a streaming site, or showing the overlay from the full
+build, shows a reviewer functionality that is not in the uploaded zip — which
+is a rejection on accuracy grounds before it is anything else.
+
 ## Single purpose
 
 Vortex hands downloads from the browser to the Vortex download manager, an
