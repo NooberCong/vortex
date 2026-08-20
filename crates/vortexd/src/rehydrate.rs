@@ -9,6 +9,13 @@
 //! to know whether the user had paused them, and quietly resuming a transfer nobody asked
 //! for is the worse of the two mistakes — the bytes are safe either way, and one click
 //! continues.
+//!
+//! The same walk answers the opposite question. A `.vxpart` that cannot be adopted cannot
+//! be resumed either, and nothing in the app will ever show it again: a stream's segment
+//! directory whose row is gone, a partial with no sidecar to resume from, a sidecar with
+//! no data beside it. Those are invisible bytes — often gigabytes of them — that no amount
+//! of tidying the list would ever reach, so the scan that adopts what it can also names
+//! what it cannot, and startup discards it.
 
 use crate::jobs::{self, Intent, Job};
 use std::collections::HashSet;
@@ -45,21 +52,46 @@ pub fn roots(settings: &vortex_proto::Settings) -> Vec<PathBuf> {
     roots
 }
 
-/// Sidecars under `roots` that no known job already owns.
-pub fn scan(roots: &[PathBuf], known: &[PathBuf]) -> Vec<Found> {
+/// What a walk of the download roots turned up.
+#[derive(Default)]
+pub struct Scan {
+    /// Downloads the database does not know about, ready to go back in the list.
+    pub found: Vec<Found>,
+    /// Partial work that can never be resumed or finished. Each is a `.vxpart` path;
+    /// [`crate::jobs::discard_part`] takes it and its sidecar together.
+    pub orphans: Vec<PathBuf>,
+}
+
+/// Every partial under `roots` that no known job already owns, sorted into the two things
+/// that can be done about one: adopt it, or discard it.
+pub fn scan(roots: &[PathBuf], known: &[PathBuf]) -> Scan {
     let known: HashSet<&Path> = known.iter().map(PathBuf::as_path).collect();
     let mut seen = HashSet::new();
-    let mut found = Vec::new();
+    let mut scan = Scan::default();
     for root in roots {
         visit(root, 0, &mut |part: PathBuf| {
-            if !known.contains(part.as_path()) && seen.insert(part.clone()) {
-                if let Some(job) = read(&part) {
-                    found.push(job);
+            if known.contains(part.as_path()) || !seen.insert(part.clone()) {
+                return;
+            }
+            match read(&part) {
+                Some(job) => scan.found.push(job),
+                // A sidecar that is there but will not open is the one case worth leaving
+                // alone: a scanner holding the file open reads exactly like a corrupt one,
+                // and the cost of guessing wrong is the whole download.
+                None if part.exists() && MetaFile::meta_path(&part).exists() => {
+                    tracing::warn!(
+                        "{} has a sidecar that will not open; leaving it where it is",
+                        part.display()
+                    );
                 }
+                // No readable block map means no way to know which of these bytes are
+                // real, and the engine will not touch the name either — it reclaims a
+                // partial only through its sidecar. Dead weight, in every case.
+                None => scan.orphans.push(part),
             }
         });
     }
-    found
+    scan
 }
 
 fn visit(dir: &Path, depth: usize, on_part: &mut impl FnMut(PathBuf)) {
@@ -70,9 +102,17 @@ fn visit(dir: &Path, depth: usize, on_part: &mut impl FnMut(PathBuf)) {
     for entry in entries.flatten() {
         let path = entry.path();
         let Ok(kind) = entry.file_type() else { continue };
-        if kind.is_dir() {
+        let extension = path.extension();
+        if extension.is_some_and(|e| e == "vxpart") {
+            // Either a transfer's partial file or a stream's directory of segments. The
+            // directory is the unit of work and there is nothing inside it worth walking
+            // into, so both arrive here the same way.
+            on_part(path);
+        } else if kind.is_dir() {
             visit(&path, depth + 1, on_part);
-        } else if path.extension().is_some_and(|e| e == "meta") {
+        } else if extension.is_some_and(|e| e == "meta") {
+            // A sidecar is named after its partial, which is what the caller decides
+            // about — including when the partial is no longer there.
             let part = path.with_extension("");
             if part.extension().is_some_and(|e| e == "vxpart") {
                 on_part(part);
@@ -203,9 +243,10 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         let part = sidecar(&nested, "ubuntu.iso", 4 << 20);
 
-        let found = scan(&[root.path().to_path_buf()], &[]);
-        assert_eq!(found.len(), 1);
-        let job = found.into_iter().next().unwrap().into_job(JobId(7));
+        let scan = scan(&[root.path().to_path_buf()], &[]);
+        assert!(scan.orphans.is_empty());
+        assert_eq!(scan.found.len(), 1);
+        let job = scan.found.into_iter().next().unwrap().into_job(JobId(7));
         assert_eq!(job.view.filename, "ubuntu.iso");
         assert_eq!(job.view.total, Some(4 << 20));
         assert_eq!(job.view.host, "cdn.example.com");
@@ -219,17 +260,85 @@ mod tests {
     }
 
     #[test]
-    fn a_job_the_daemon_already_knows_is_not_found_twice() {
+    fn a_job_the_daemon_already_knows_is_neither_found_nor_swept() {
         let root = tempfile::tempdir().unwrap();
         let part = sidecar(root.path(), "a.bin", 1 << 20);
-        assert!(scan(&[root.path().to_path_buf()], &[part]).is_empty());
+        let scan = scan(&[root.path().to_path_buf()], &[part]);
+        assert!(scan.found.is_empty());
+        assert!(scan.orphans.is_empty());
     }
 
     #[test]
-    fn a_sidecar_with_no_data_file_describes_nothing() {
+    fn a_sidecar_with_no_data_file_is_swept() {
         let root = tempfile::tempdir().unwrap();
         let part = sidecar(root.path(), "b.bin", 1 << 20);
         std::fs::remove_file(&part).unwrap();
-        assert!(scan(&[root.path().to_path_buf()], &[]).is_empty());
+
+        let scan = scan(&[root.path().to_path_buf()], &[]);
+        assert!(scan.found.is_empty(), "a sidecar alone describes nothing");
+        assert_eq!(scan.orphans, vec![part]);
+    }
+
+    /// A stream's partial is a directory of segments with no sidecar to describe it, so
+    /// nothing can adopt it and nothing but the sweep will ever free it. Gigabytes of
+    /// `.ts` files used to sit here for good the moment the row went away.
+    #[test]
+    fn a_stream_that_lost_its_row_does_not_keep_its_segments() {
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join("Lecture.mp4.vxpart");
+        std::fs::create_dir_all(work.join("nested")).unwrap();
+        std::fs::write(work.join("0001.ts"), vec![0u8; 32]).unwrap();
+
+        let scan = scan(&[root.path().to_path_buf()], &[]);
+        assert!(scan.found.is_empty());
+        assert_eq!(scan.orphans, vec![work.clone()]);
+
+        crate::jobs::discard_part(&work);
+        assert!(!work.exists());
+    }
+
+    #[test]
+    fn a_stream_the_daemon_still_lists_keeps_its_segments() {
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join("Lecture.mp4.vxpart");
+        std::fs::create_dir_all(&work).unwrap();
+        let scan = scan(&[root.path().to_path_buf()], &[work]);
+        assert!(scan.orphans.is_empty());
+    }
+
+    #[test]
+    fn a_partial_with_no_sidecar_can_never_be_resumed_and_goes() {
+        let root = tempfile::tempdir().unwrap();
+        let part = root.path().join("c.bin.vxpart");
+        std::fs::write(&part, vec![0u8; 4096]).unwrap();
+
+        let scan = scan(&[root.path().to_path_buf()], &[]);
+        assert!(scan.found.is_empty());
+        assert_eq!(scan.orphans, vec![part]);
+    }
+
+    /// A scanner holding the sidecar open reads exactly like a corrupt one, and the cost
+    /// of guessing wrong is the whole download. Unreadable is not the same as absent.
+    #[test]
+    fn a_sidecar_that_will_not_open_is_left_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let part = sidecar(root.path(), "d.bin", 1 << 20);
+        std::fs::write(MetaFile::meta_path(&part), b"not a sidecar").unwrap();
+
+        let scan = scan(&[root.path().to_path_buf()], &[]);
+        assert!(scan.found.is_empty());
+        assert!(scan.orphans.is_empty());
+    }
+
+    #[test]
+    fn overlapping_roots_decide_about_a_partial_once() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("Video");
+        std::fs::create_dir_all(&nested).unwrap();
+        let work = nested.join("Lecture.mp4.vxpart");
+        std::fs::create_dir_all(&work).unwrap();
+
+        let scan = scan(&[root.path().to_path_buf(), nested.clone()], &[]);
+        assert_eq!(scan.orphans, vec![work]);
     }
 }

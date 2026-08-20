@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 use vortex_engine::job::Control;
+use vortex_engine::meta::MetaFile;
 use vortex_engine::naming;
 use vortex_proto::{
     Category, JobId, JobSpec, JobState, JobView, Priority, ProgressFrame, TransferMode,
@@ -57,12 +58,18 @@ impl Job {
             control.stop();
         }
     }
+}
 
-    pub fn part_files(&self) -> [PathBuf; 2] {
-        let mut meta = self.part.clone().into_os_string();
-        meta.push(".meta");
-        [self.part.clone(), PathBuf::from(meta)]
-    }
+/// Deletes a job's partial work: the `.vxpart` and the sidecar beside it.
+///
+/// A file transfer's partial is a file and a media job's is a directory of segments. One
+/// call takes either, because every caller means "the unfinished work, whatever shape it
+/// has" — and remembering which shape a job had is exactly the bookkeeping that once let
+/// `Start over` on a stream keep the segments it was meant to throw away.
+pub fn discard_part(part: &Path) {
+    let _ = std::fs::remove_file(part);
+    let _ = std::fs::remove_dir_all(part);
+    let _ = std::fs::remove_file(MetaFile::meta_path(part));
 }
 
 /// The record as it looks the moment a job is submitted — before anyone has asked the
@@ -136,7 +143,13 @@ pub fn category_of(spec: &JobSpec, filename: &str) -> Category {
 /// existing sidecar by exact name, so this matches for every resume; a genuinely new job
 /// that collides gets a different name, and the engine tells us which one it chose.
 pub fn expected_part(dest_dir: &Path, filename: &str) -> PathBuf {
-    let mut path = dest_dir.join(naming::sanitize(filename)).into_os_string();
+    part_of(&dest_dir.join(naming::sanitize(filename)))
+}
+
+/// The partial that belongs to a destination: `<destination>.vxpart`, the same name the
+/// engine and the media job both build for themselves.
+pub fn part_of(dest: &Path) -> PathBuf {
+    let mut path = dest.as_os_str().to_owned();
     path.push(".vxpart");
     PathBuf::from(path)
 }

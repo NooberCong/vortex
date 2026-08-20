@@ -15,7 +15,7 @@ use crate::jobs::{self, Intent, Job};
 use crate::settings::{self, SettingsFile};
 use crate::store::{Store, StoredJob};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -332,11 +332,16 @@ impl Daemon {
                         .await;
                 });
             }
+            // Tidying the list is not a decision about anyone's data, so it only takes the
+            // rows that have nothing left to lose. A failed download is terminal in the
+            // state machine but not on disk: its `.vxpart` is whole and one Retry away
+            // from finishing, and `remove` would throw that away without asking. Those
+            // rows keep their ×, which is where a question like that belongs.
             Command::ClearCompleted => {
                 let finished: Vec<JobId> = self
                     .jobs
                     .iter()
-                    .filter(|(_, job)| job.view.state.is_terminal())
+                    .filter(|(_, job)| job.view.state == JobState::Completed)
                     .map(|(id, _)| *id)
                     .collect();
                 for id in finished {
@@ -451,11 +456,7 @@ impl Daemon {
         match resolution {
             Resolution::Cancel => return self.cancel(id),
             Resolution::Retry => {}
-            Resolution::StartOver => {
-                for path in job.part_files() {
-                    let _ = std::fs::remove_file(path);
-                }
-            }
+            Resolution::StartOver => jobs::discard_part(&job.part),
             Resolution::KeepBoth => {
                 // Leave the old partial exactly where it is and take the next free name;
                 // the engine reclaims a `.vxpart` only when its name matches.
@@ -523,12 +524,24 @@ impl Daemon {
             if active >= limit {
                 return;
             }
-            let next = self
-                .jobs
-                .values()
-                .filter(|j| j.view.state == JobState::Queued && !j.is_running())
-                .min_by_key(|j| jobs::queue_key(&j.view))
-                .map(|j| j.view.id);
+            let next = {
+                // Two jobs that expect the same `.vxpart` cannot run at once — they would
+                // write one file, and one block map, over each other. The second waits its
+                // turn, by which time the first has either renamed its partial away or
+                // left one behind with a name of its own.
+                let busy: Vec<&Path> = self
+                    .jobs
+                    .values()
+                    .filter(|j| j.is_running())
+                    .map(|j| j.part.as_path())
+                    .collect();
+                self.jobs
+                    .values()
+                    .filter(|j| j.view.state == JobState::Queued && !j.is_running())
+                    .filter(|j| !busy.contains(&j.part.as_path()))
+                    .min_by_key(|j| jobs::queue_key(&j.view))
+                    .map(|j| j.view.id)
+            };
             match next {
                 Some(id) => self.start(id),
                 None => return,
@@ -747,11 +760,11 @@ impl Daemon {
     /// Takes a job out of the list, with whatever cleanup its exit deserves.
     fn retire(&mut self, id: JobId, intent: Intent) {
         let Some(job) = self.jobs.remove(&id) else { return };
-        for path in job.part_files() {
-            // A media job's `.vxpart` is a directory of segments, a file transfer's is a
-            // file. Both are "the partial work", and both go.
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_dir_all(&path);
+        // Two rows can name the same `.vxpart`: the path a job expects before it has run
+        // is a guess from the filename, and asking for the same link twice makes the same
+        // guess twice. The row that leaves must not take the other one's bytes with it.
+        if !self.jobs.values().any(|other| other.part == job.part) {
+            jobs::discard_part(&job.part);
         }
         if let Intent::Remove { delete_file: true } = intent {
             let _ = std::fs::remove_file(&job.view.dest_path);
@@ -1001,12 +1014,34 @@ impl Daemon {
         }
 
         let roots = crate::rehydrate::roots(self.settings.get());
-        let known: Vec<PathBuf> = self.jobs.values().map(|job| job.part.clone()).collect();
-        for found in crate::rehydrate::scan(&roots, &known) {
+        // Both names a restored job could be using. `part` is rebuilt from the filename,
+        // which is a guess for anything the engine renamed — a stream muxed into a
+        // different container, most of all — and the destination is the answer it gave.
+        // A job listed under one name and holding a partial under the other is a job
+        // whose bytes the sweep below would take for an orphan.
+        let known: Vec<PathBuf> = self
+            .jobs
+            .values()
+            .flat_map(|job| {
+                [
+                    job.part.clone(),
+                    jobs::part_of(Path::new(&job.view.dest_path)),
+                ]
+            })
+            .collect();
+        let scan = crate::rehydrate::scan(&roots, &known);
+        for found in scan.found {
             let Ok(id) = self.store.next_job_id() else { continue };
             let job = found.into_job(id);
             self.jobs.insert(id, job);
             self.persist(id);
+        }
+        // Nothing will ever offer these to the user, so nothing but this will ever free
+        // them. Startup is the moment to do it: the tree is already being walked and not
+        // one job is running, so there is nothing to race.
+        for orphan in scan.orphans {
+            tracing::info!("discarding orphaned partial {}", orphan.display());
+            jobs::discard_part(&orphan);
         }
 
         let count = self.jobs.len();

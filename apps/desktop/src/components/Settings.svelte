@@ -324,8 +324,8 @@
         <dd class="num">{queue.jobs.length} in the list</dd>
       </dl>
       <div class="setting">
-        <span>Remove everything that has finished</span>
-        <button class="button" onclick={() => act.clearCompleted()}>Clear finished</button>
+        <span>Remove the completed downloads from the list</span>
+        <button class="button" onclick={() => act.clearCompleted()}>Clear completed</button>
       </div>
     </section>
   {/if}
