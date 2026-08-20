@@ -199,9 +199,13 @@ function site(state: PopupState, redraw: () => void): HTMLElement {
 function why(state: PopupState): string {
   if (state.daemon === "missing") return "Vortex is not installed, so nothing is captured here.";
   if (state.daemon === "stopped") return "Vortex is not running, so this cannot be changed.";
+  // Worded for what the switch *does* — capture — rather than for what the full build
+  // draws on top of it. The overlay does not exist in the store build, and a line
+  // promising a button on a video would describe a feature that package does not have
+  // (`src/build.ts`). Where the download goes is true of both.
   return state.optedOut
-    ? "Off. The download button stays hidden here."
-    : "On. A download button appears on videos here.";
+    ? "Off. Downloads here are left to the browser."
+    : "On. Downloads here are handed to Vortex.";
 }
 
 // -- Captured streams --------------------------------------------------------

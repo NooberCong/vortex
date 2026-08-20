@@ -1,0 +1,220 @@
+/*
+ * The listing screenshots.
+ *
+ * 1280x800, which is the larger of the two sizes the Chrome Web Store accepts, composed
+ * in the product's own design language rather than in a marketing one. The rule the
+ * tokens carry holds here too: colour is reserved for data, so these are paper, ink and
+ * hairlines, and the only saturated values in the whole set are the eight connection
+ * lanes — which are bytes, and are the one thing on any of these pages worth colouring.
+ *
+ * The popup is not redrawn here. It is loaded in an iframe from the extension's own
+ * stylesheet, scaled up so it is legible at the size the store renders these at.
+ */
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+body {
+  width: 1280px;
+  height: 800px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* A single hairline at the top, so the canvas reads as a surface and not as a slide. */
+body::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: var(--rule);
+}
+
+.stage {
+  display: grid;
+  grid-template-columns: 470px minmax(0, 1fr);
+  align-items: center;
+  gap: 72px;
+  height: 100%;
+  padding: 0 88px;
+}
+
+.stage.centred {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  text-align: center;
+}
+
+/* ── Words ──────────────────────────────────────────────────────────────── */
+
+.eyebrow {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: var(--s4);
+}
+
+.headline {
+  font-size: 46px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.08;
+  margin-bottom: var(--s4);
+}
+
+.sub {
+  font-size: 17px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  max-width: 40ch;
+}
+
+.centred .sub {
+  max-width: 62ch;
+}
+
+.foot {
+  margin-top: var(--s5);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+/* ── The popup, at a size someone can read ──────────────────────────────── */
+
+.panel {
+  justify-self: center;
+  width: 380px;
+  height: 168px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  transform: scale(1.62);
+  transform-origin: center;
+}
+
+.panel iframe {
+  display: block;
+  width: 380px;
+  height: 168px;
+  border: 0;
+}
+
+/* ── Connection lanes: the one place colour is allowed ──────────────────── */
+
+.lanes {
+  justify-self: center;
+  width: 100%;
+  max-width: 520px;
+  padding: var(--s5);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.lanes .file {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding-bottom: var(--s3);
+  margin-bottom: var(--s3);
+  border-bottom: 1px solid var(--rule);
+}
+
+.lanes .name {
+  font-size: var(--t-name);
+  font-weight: 500;
+}
+
+.lanes .rate {
+  font-family: var(--font-num);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.lane {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 76px;
+  align-items: center;
+  gap: var(--s3);
+  height: 22px;
+}
+
+.lane .n {
+  font-family: var(--font-num);
+  font-size: var(--t-micro);
+  color: var(--text-faint);
+}
+
+.lane .bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.lane .bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.lane .num {
+  font-family: var(--font-num);
+  font-size: var(--t-meta);
+  color: var(--text-dim);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Plain statements of fact ───────────────────────────────────────────── */
+
+.facts {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  max-width: 760px;
+  margin-top: var(--s6);
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.fact {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s4);
+  padding: var(--s4) var(--s5);
+  background: var(--surface);
+  text-align: left;
+}
+
+.fact .what {
+  flex: none;
+  width: 168px;
+  font-size: var(--t-name);
+  font-weight: 500;
+}
+
+.fact .detail {
+  color: var(--text-dim);
+  line-height: 1.5;
+}

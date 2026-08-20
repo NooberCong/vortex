@@ -1,0 +1,57 @@
+<!doctype html>
+<html data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <title>Vortex</title>
+    <!--
+      The popup, rendered from the same stylesheet the extension ships and the same DOM
+      `entrypoints/popup/main.ts` builds. Not a mock-up: a screenshot of a drawing of the
+      product is a promise the product has to keep, and this way the promise is kept by
+      construction. Change the popup and this changes with it.
+
+      What is shown is the store build — the header and the site switch, and no captured
+      media section, because `MEDIA_CAPTURE` is false in the package being submitted.
+
+      `?off` renders the switched-off state.
+    -->
+    <link rel="stylesheet" href="fonts.css" />
+    <link rel="stylesheet" href="../../../packages/tokens/tokens.css" />
+    <link rel="stylesheet" href="../entrypoints/popup/style.css" />
+    <style>
+      /* The popup sizes itself to its content; an iframe does not. */
+      body {
+        width: 380px;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="root">
+      <div class="head">
+        <div class="wordmark">
+          <img src="../public/icon/128.png" alt="" />
+          <span>Vortex</span>
+        </div>
+        <div class="status" data-up="true">Ready</div>
+      </div>
+      <section>
+        <div class="eyebrow">This site</div>
+        <div class="origin">example.com</div>
+        <label class="switch">
+          <span class="copy">
+            <span class="what">Offer downloads on this site</span>
+            <span class="why">On. Downloads here are handed to Vortex.</span>
+          </span>
+          <input type="checkbox" checked />
+        </label>
+      </section>
+    </main>
+    <script>
+      if (location.search.includes("off")) {
+        document.querySelector(".switch input").checked = false;
+        document.querySelector(".switch .why").textContent =
+          "Off. Downloads here are left to the browser.";
+      }
+    </script>
+  </body>
+</html>

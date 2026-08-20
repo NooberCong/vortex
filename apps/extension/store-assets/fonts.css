@@ -1,0 +1,35 @@
+/*
+ * The product's own faces, loaded from the workspace's font packages.
+ *
+ * `tokens.css` names "Instrument Sans" and "Commit Mono" and stops there — in the
+ * extension the desktop app has already loaded them, and in a listing screenshot nobody
+ * has. Without this the render falls back to system-ui and the picture stops being a
+ * picture of the product.
+ */
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: block;
+  src: url("../../../node_modules/@fontsource-variable/instrument-sans/files/instrument-sans-latin-wght-normal.woff2")
+    format("woff2-variations");
+}
+
+@font-face {
+  font-family: "Commit Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("../../../node_modules/@fontsource/commit-mono/files/commit-mono-latin-400-normal.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "Commit Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url("../../../node_modules/@fontsource/commit-mono/files/commit-mono-latin-500-normal.woff2")
+    format("woff2");
+}

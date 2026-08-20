@@ -10,7 +10,7 @@
     "build": "wxt build && wxt build -b firefox",
     "build:store": "wxt build --mode store && wxt build -b firefox --mode store",
     "zip": "wxt zip && wxt zip -b firefox",
-    "zip:store": "wxt zip --mode store && wxt zip -b firefox --mode store",
+    "zip:store": "wxt zip --mode store && wxt zip -b firefox --mode store && wxt prepare",
     "postinstall": "wxt prepare",
     "check": "wxt prepare && tsc --noEmit",
     "test": "vitest run"
