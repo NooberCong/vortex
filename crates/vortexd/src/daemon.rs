@@ -249,8 +249,20 @@ impl Daemon {
                 }
                 // A new subscriber should not have to wait up to half a second to see
                 // anything, so answer with the current state immediately.
+                //
+                // Only for a job that is actually running. `latest` is the last frame the
+                // engine produced and it outlives the run that produced it, so replaying it
+                // unconditionally hands a finished or paused job a map full of live workers
+                // — one of them mid-steal at 40 MB/s, minutes after the file landed. The
+                // guard belongs here rather than at the write: the window asks "what is this
+                // job doing", and a job with no run is doing nothing.
                 if let SubscriptionScope::Detail { job } = scope {
-                    if let Some(frame) = self.jobs.get(&job).map(|j| j.latest.clone()) {
+                    if let Some(frame) = self
+                        .jobs
+                        .get(&job)
+                        .filter(|j| j.is_running())
+                        .map(|j| j.latest.clone())
+                    {
                         self.send(client, Event::JobProgress { job, frame });
                     }
                 }

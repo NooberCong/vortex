@@ -61,6 +61,27 @@ async fn progress_past(
         .await
 }
 
+/// Whether any `JobProgress` for `job` arrives before the daemon answers a `Ping`.
+///
+/// A fence rather than a sleep. One client is one ordered pipe, so a frame the daemon was
+/// going to send in response to the preceding command is already queued ahead of the
+/// `Pong` — this either sees it or it was never sent, and it never flakes either way.
+async fn progress_before_pong(client: &mut Client, job: JobId) -> bool {
+    client.send(Command::Ping).await;
+    let mut seen = false;
+    client
+        .expect(|event| match event {
+            Event::JobProgress { job: id, .. } if *id == job => {
+                seen = true;
+                None
+            }
+            Event::Pong => Some(()),
+            _ => None,
+        })
+        .await;
+    seen
+}
+
 fn completed(outcome: Outcome) -> (String, u64) {
     match outcome {
         Outcome::Completed { path, bytes, .. } => (path, bytes),
@@ -419,6 +440,85 @@ async fn removing_a_duplicate_row_leaves_the_running_download_its_bytes() {
 /// Tidying the list is not a decision about anyone's data. A failed download is terminal
 /// in the state machine but not on disk — its `.vxpart` is whole and one Retry away from
 /// finishing — and clearing it would throw that away without asking.
+/// A job that is not running has nothing to say about its connections, and the daemon does
+/// not pretend otherwise.
+///
+/// `Job::latest` is the last frame the engine produced and it outlives the run that
+/// produced it — nothing clears it when a transfer stops. Replaying it to whoever
+/// subscribes next is how an expanded row on a finished download came to show a live
+/// worker mid-steal at 40 MB/s twenty minutes after the file landed: the window asked what
+/// the job was doing and was handed a photograph of the last moment it was doing anything.
+///
+/// Both halves are here because the guard is `is_running`, not `is_terminal`. A paused job
+/// has exactly the same stale frame sitting on it, and a narrower guard would leave that
+/// case broken while looking like a fix.
+#[tokio::test]
+async fn a_stopped_job_replays_no_progress_frame_to_a_new_subscriber() {
+    let root = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(&root.path().join("data"), &root.path().join("downloads")).await;
+    let mut client = daemon.client().await;
+
+    // Rate-limited, so there is time to pause it in the middle. Paused rather than
+    // never-started on purpose: a job that never ran has a default `latest` and would pass
+    // this test however broken the daemon was.
+    let slow_server = hostile_server::spawn(SIZE, slow()).await;
+    let paused = client
+        .submit(JobSpec::file(envelope(slow_server.url(), "paused.bin")))
+        .await;
+    client
+        .send(Command::Subscribe {
+            scope: SubscriptionScope::Detail { job: paused },
+        })
+        .await;
+    progress_past(&mut client, 0).await;
+    client.send(Command::Pause { job: paused }).await;
+    client
+        .wait_for_state(paused, |state| matches!(state, JobState::Paused))
+        .await;
+
+    // Closing the row, which is what the window does before it opens another: the
+    // subscription moves off the job and the daemon stops sending it frames. Draining to
+    // the Pong clears the ones already in flight, so anything seen after this point was
+    // sent *because of* the re-subscribe below rather than left over from the transfer.
+    client
+        .send(Command::Subscribe {
+            scope: SubscriptionScope::Summary,
+        })
+        .await;
+    progress_before_pong(&mut client, paused).await;
+
+    client
+        .send(Command::Subscribe {
+            scope: SubscriptionScope::Detail { job: paused },
+        })
+        .await;
+    assert!(
+        !progress_before_pong(&mut client, paused).await,
+        "a paused job handed its new subscriber the frame it stopped on"
+    );
+
+    // And the case the bug was reported from: a download that ran to the end, expanded
+    // afterwards. Its own server, unthrottled — there is nothing to catch it in the middle
+    // of this time.
+    let server = hostile_server::spawn(SIZE, Behaviour::default()).await;
+    let done = client
+        .submit(JobSpec::file(envelope(server.url(), "done.bin")))
+        .await;
+    completed(client.expect(finished(done)).await);
+
+    client
+        .send(Command::Subscribe {
+            scope: SubscriptionScope::Detail { job: done },
+        })
+        .await;
+    assert!(
+        !progress_before_pong(&mut client, done).await,
+        "a finished job handed its new subscriber a map of workers that are long gone"
+    );
+
+    daemon.stop().await;
+}
+
 #[tokio::test]
 async fn clearing_completed_downloads_leaves_the_failed_ones_alone() {
     let server = hostile_server::spawn(SIZE, Behaviour::default()).await;

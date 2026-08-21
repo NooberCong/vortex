@@ -7,7 +7,7 @@
   import { prompt } from "$lib/copy";
   import { CALM, exit, fold } from "$lib/motion";
   import { channel } from "$lib/segments";
-  import { queue, type Job } from "$lib/store.svelte";
+  import { isDone, queue, type Job } from "$lib/store.svelte";
   import Icon from "./Icon.svelte";
   import SegmentMap from "./SegmentMap.svelte";
   import Sparkline from "./Sparkline.svelte";
@@ -68,6 +68,21 @@
    * suggestion. A running job's bytes are in a `.vxpart` under a different name.
    */
   const saved = $derived(view.state.kind === "completed");
+  /**
+   * Whether this job is over for good, which is what decides if the map is drawn at all.
+   *
+   * The map is a picture of work in progress — which connections are live, which one is
+   * stalling, the scheduler moving a lease off a slow worker. A terminal job has none of
+   * that, and nothing can ever give it any back, so what is left to draw is a full bar:
+   * a fatter copy of the one the collapsed body is already showing three lines above
+   * (`JobRow.svelte`). Same reasoning as `Open` and `Show in folder` — an element whose
+   * only possible outcome is nothing does not get to take up the room (05 §Expanded row).
+   *
+   * Not `saved`: a failed job is just as over. And not "has no live frame", which would
+   * also catch paused — a paused job's map still answers "how much did it keep", and it
+   * has a Resume button that turns it live again in the same place, with no jump.
+   */
+  const over = $derived(isDone(view.state));
 
   function protocol(p: Protocol | null | undefined): string {
     if (p === "H3") return "HTTP/3 · QUIC";
@@ -120,43 +135,51 @@
     </div>
   {/if}
 
-  <SegmentMap
-    runs={detail?.runs ?? []}
-    blocks={detail?.blocks ?? 0}
-    height={28}
-    perLane
-    ratio={ratio(job.completed, view.total)}
-    description="Per-connection segment map"
-  />
+  {#if !over}
+    <SegmentMap
+      runs={detail?.runs ?? []}
+      blocks={detail?.blocks ?? 0}
+      height={28}
+      perLane
+      ratio={ratio(job.completed, view.total)}
+      description="Per-connection segment map"
+    />
+  {/if}
 
-  <div class="columns">
-    <div class="workers">
-      {#if workers.length === 0}
-        <p class="meta idle">No connection is open right now.</p>
-      {:else}
-        {#each workers as worker (worker.lane)}
-          <div class="worker" class:stealing={worker.stealingFrom}>
-            <span class="lane num" style:color="var(--w{channel(worker.lane)})">
-              w{worker.lane}
-            </span>
-            <span class="speed num">{rate(sampled.get(worker.lane) ?? worker.bps)}</span>
-            <Sparkline values={worker.spark} channel={channel(worker.lane)} />
-            {#if worker.stealingFrom}
-              <!-- Named as well as drawn: the map shows the lease shrinking, and a user
-                   who has not learned to read the map yet gets the sentence. -->
-              <span class="micro steal">being stolen from</span>
-            {/if}
-          </div>
-        {/each}
-      {/if}
-    </div>
+  <div class="columns" class:facts-only={over}>
+    {#if !over}
+      <div class="workers">
+        {#if workers.length === 0}
+          <p class="meta idle">No connection is open right now.</p>
+        {:else}
+          {#each workers as worker (worker.lane)}
+            <div class="worker" class:stealing={worker.stealingFrom}>
+              <span class="lane num" style:color="var(--w{channel(worker.lane)})">
+                w{worker.lane}
+              </span>
+              <span class="speed num">{rate(sampled.get(worker.lane) ?? worker.bps)}</span>
+              <Sparkline values={worker.spark} channel={channel(worker.lane)} />
+              {#if worker.stealingFrom}
+                <!-- Named as well as drawn: the map shows the lease shrinking, and a user
+                     who has not learned to read the map yet gets the sentence. -->
+                <span class="micro steal">being stolen from</span>
+              {/if}
+            </div>
+          {/each}
+        {/if}
+      </div>
+    {/if}
 
     <dl class="facts">
-      <dt class="micro">Connections</dt>
-      <dd class="num">
-        {frame?.connections ?? 0}{#if ceiling}<span class="dim">&nbsp;of {ceiling}</span>{/if}
-        <span class="dim adaptive">adaptive</span>
-      </dd>
+      {#if !over}
+        <!-- Live, like the map: `0 of 16 · adaptive` on a job that ended half an hour ago
+             is a true number about nothing, describing a controller that is not running. -->
+        <dt class="micro">Connections</dt>
+        <dd class="num">
+          {frame?.connections ?? 0}{#if ceiling}<span class="dim">&nbsp;of {ceiling}</span>{/if}
+          <span class="dim adaptive">adaptive</span>
+        </dd>
+      {/if}
 
       <dt class="micro">Protocol</dt>
       <dd>{protocol(view.protocol)}</dd>
@@ -262,6 +285,20 @@
     max-width: 880px;
   }
 
+  /*
+   * Nothing to put beside the facts, so they take the reading column rather than sitting
+   * out at the right-hand edge under an empty one. That alone is what unwraps
+   * `Finished … · took 27m 6s`: the line needs about 330 px and the second column was 300.
+   *
+   * `max-content` rather than `1fr` because the two draw the same — nothing paints the
+   * track, so a `1fr` list looks identical while claiming a box four times the width of
+   * anything in it. `minmax(0, …)` keeps the 880 px cap for a long hostname, and `dd`'s
+   * ellipsis takes it from there.
+   */
+  .columns.facts-only {
+    grid-template-columns: minmax(0, max-content);
+  }
+
   .workers {
     display: flex;
     flex-direction: column;
@@ -335,7 +372,14 @@
     display: flex;
     align-items: center;
     gap: var(--s2);
-    max-width: 880px;
+    /*
+     * Full width, unlike the facts above it, and deliberately so. These are controls
+     * rather than content: the path takes the slack and the buttons anchor to the right
+     * edge of the panel, which puts them directly under the × and the open-external icon
+     * in the row's own corner — both of those sit at `--s5` too, and `.detail` carries the
+     * same `--s5` gutter. Capping this at the 880 px reading measure instead would leave
+     * them floating at an edge nothing else in the window uses.
+     */
   }
 
   .path {
