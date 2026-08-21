@@ -1,6 +1,7 @@
 import { browser } from "wxt/browser";
 
-import type { MediaCandidate, MediaTrack, MediaVariant } from "@vortex/proto";
+import type { JobView, MediaCandidate, MediaTrack, MediaVariant } from "@vortex/proto";
+import { bytes, isTerminal, label, ratio } from "@vortex/proto";
 import { MEDIA_CAPTURE, RELEASES } from "@/src/build";
 import type { FromPage, PopupState } from "@/src/messages";
 import { usableCandidates } from "@/src/overlay/anchor";
@@ -19,18 +20,35 @@ import "./style.css";
  * the honest answer to "why is there no download button" lived in a JSON file the user was
  * never told about. That is the bug this window closes (03 §The overlay).
  *
- * So it answers three questions, in the order someone actually asks them:
+ * So it answers four questions, in the order someone actually asks them:
  *
  * 1. **Is Vortex working at all?** The daemon light, first, because nothing below it can
  *    do anything while the answer is no — and if the app was never installed, the way to
  *    get it, because "not running" is a useless thing to tell someone who has nothing to
  *    run (`src/host.ts`).
- * 2. **Is it switched on here?** The site switch, which is the only way back on.
- * 3. **What did it find?** Every confirmed stream on this tab, with its ladder.
+ * 2. **What is it doing right now?** The transfers, which is where a download handed over
+ *    from this browser can be found by name — and the way into the app, which is where it
+ *    can be found properly.
+ * 3. **Is it switched on here?** The site switch, which is the only way back on.
+ * 4. **What did it find?** Every confirmed stream on this tab, with its ladder.
  *
  * It renders from one message and re-renders wholesale. A popup is open for a few seconds
  * and is destroyed on blur, so there is no live state worth keeping and anything clever
  * about incremental updates would be complexity spent on a window nobody watches.
+ *
+ * The transfers are the one exception, and a narrow one: that section replaces its own
+ * rows on a poll, and nothing else on the panel is touched. Redrawing wholesale there
+ * would take the "Added to Vortex" a rung is showing away from under the pointer.
+ *
+ * ## Why this list is deliberately meagre
+ *
+ * It shows a name, a state and a hairline. No speed, no ETA, no segment map. Those live on
+ * the 2 Hz `Summary` subscription, which would keep the MV3 service worker awake for as
+ * long as anything was downloading (03 §Service worker lifetime) — and the segment map is
+ * the one thing in Vortex worth being remembered for (05 §Signature). A 380 px
+ * reimplementation of it would be a worse copy competing with the real one. This panel's
+ * job is to say *that* a transfer exists and to be one click from the window that draws it
+ * properly.
  */
 
 void main();
@@ -53,7 +71,15 @@ async function main(): Promise<void> {
     return;
   }
   draw(root, state, tabId);
+
+  // Only ever the first draw. `redraw` replaces these same children when the site switch
+  // is toggled, and an entrance played for that would claim the panel had just opened.
+  root.setAttribute("data-entering", "");
+  setTimeout(() => root.removeAttribute("data-entering"), ARRIVAL);
 }
+
+/** Long enough for the last section's 200 ms to finish behind its 160 ms delay. */
+const ARRIVAL = 400;
 
 function draw(root: HTMLElement, state: PopupState, tabId: number): void {
   const redraw = () => {
@@ -64,6 +90,7 @@ function draw(root: HTMLElement, state: PopupState, tabId: number): void {
   // Above the site switch, because a switch for a program that is not on the machine is
   // not the thing to read first.
   if (state.daemon === "missing") root.append(install());
+  if (state.daemon === "ready") root.append(transfers(state.jobs));
   root.append(site(state, redraw));
   if (MEDIA_CAPTURE) root.append(streams(state, tabId));
 }
@@ -137,6 +164,138 @@ function install(): HTMLElement {
   });
   section.append(get);
   return section;
+}
+
+// -- Transfers ---------------------------------------------------------------
+
+/**
+ * How often the list is asked for again while the panel is open.
+ *
+ * Slower than an eye notices a stutter and far slower than the 2 Hz the app's own rows
+ * run at, because every tick is a round trip through the background worker and this is a
+ * summary, not a readout. It stops when the popup is destroyed, which is on blur.
+ */
+const POLL = 900;
+/** More rows than this and the answer is "open the app", which is the button underneath. */
+const MOST = 5;
+
+/**
+ * The one poll.
+ *
+ * A module variable rather than a closure, because the site switch redraws the whole panel
+ * and would otherwise leave the previous section's interval running against detached nodes
+ * — and start a second one beside it.
+ */
+let polling: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * What Vortex is doing right now, and the way into the window that shows it properly.
+ *
+ * Unfinished jobs only. A completed one has nothing left to watch and the queue keeps
+ * every one of them until somebody clears it, so listing them here would bury the two the
+ * user is actually waiting on under a hundred they have forgotten about.
+ */
+function transfers(initial: JobView[] | null): HTMLElement {
+  const section = document.createElement("section");
+  section.className = "transfers";
+
+  const eyebrow = text("div", "eyebrow", "Transfers");
+  const rows = el("div", "rows");
+  section.append(eyebrow, rows, openApp());
+
+  const fill = (jobs: JobView[] | null): void => {
+    // `null` is the daemon not answering, which it can start doing at any tick — it is
+    // quit from the tray, or it crashes. That is not an empty queue, and saying "nothing
+    // is transferring" about downloads that may well still exist is the one thing this
+    // panel must not do.
+    if (jobs === null) {
+      eyebrow.textContent = "Transfers";
+      rows.replaceChildren(text("div", "note", "Vortex stopped answering."));
+      return;
+    }
+
+    const running = jobs.filter((job) => !isTerminal(job.state)).sort(newestFirst);
+    eyebrow.textContent = running.length === 0 ? "Transfers" : count(running.length);
+
+    const drawn: Node[] = running.slice(0, MOST).map(row);
+    if (running.length > MOST) {
+      drawn.push(text("div", "note more", `${running.length - MOST} more in Vortex`));
+    }
+    if (drawn.length === 0) {
+      drawn.push(text("div", "note", "Nothing is transferring."));
+    }
+    rows.replaceChildren(...drawn);
+  };
+
+  fill(initial);
+  if (polling !== null) clearInterval(polling);
+  polling = setInterval(() => {
+    void send({ kind: "jobs" }).then((jobs) => fill((jobs as JobView[] | null) ?? null));
+  }, POLL);
+  return section;
+}
+
+/**
+ * One transfer.
+ *
+ * A button, because the whole row is the target: this is the shortest path from "my
+ * download vanished from the browser" to the row that has it, and asking someone to hit a
+ * chevron would be putting a lock on the door.
+ */
+function row(job: JobView): HTMLElement {
+  const button = document.createElement("button");
+  button.className = "transfer";
+  button.type = "button";
+  button.title = job.filename;
+
+  const bar = el("div", "bar");
+  const fraction = ratio(job.completed, job.total);
+  // No bar at all rather than an empty one where the size is unknown. A track drawn at 0%
+  // for a chunked response is a claim that nothing has arrived (05 §Numbers).
+  if (fraction !== null) bar.style.setProperty("--done", `${Math.round(fraction * 100)}%`);
+  else bar.dataset.unknown = "true";
+
+  button.append(text("div", "name", job.filename), text("div", "meta", meta(job)), bar);
+  button.addEventListener("click", () => {
+    // Closed only once the background has the message, the same care `install` takes: a
+    // popup that dies mid-`sendMessage` swallows it, and the user's click did nothing.
+    void send({ kind: "reveal", job: job.id }).finally(() => window.close());
+  });
+  return button;
+}
+
+/**
+ * The line under the filename.
+ *
+ * `label` returns nothing for a moving job — it is the same vocabulary the app's rows use
+ * (`@vortex/proto`), and there it defers to the segment map. Here it defers to the bytes,
+ * which are what a panel with no map has to say instead.
+ */
+function meta(job: JobView): string {
+  const word = label(job.state);
+  if (word) return word;
+  return job.total ? `${bytes(job.completed)} of ${bytes(job.total)}` : bytes(job.completed);
+}
+
+/** The way to the window, whether or not anything is transferring. */
+function openApp(): HTMLElement {
+  const button = document.createElement("button");
+  button.className = "open";
+  button.type = "button";
+  button.textContent = "Open Vortex";
+  button.addEventListener("click", () => {
+    void send({ kind: "reveal", job: null }).finally(() => window.close());
+  });
+  return button;
+}
+
+/** The app's own order: newest first, and by id where two arrived in the same second. */
+function newestFirst(a: JobView, b: JobView): number {
+  return b.createdAt - a.createdAt || Number(b.id) - Number(a.id);
+}
+
+function count(n: number): string {
+  return n === 1 ? "1 transfer" : `${n} transfers`;
 }
 
 // -- The site switch ---------------------------------------------------------

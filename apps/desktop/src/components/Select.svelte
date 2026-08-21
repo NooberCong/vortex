@@ -1,4 +1,5 @@
 <script lang="ts" generics="T extends string | number">
+  import { exit, QUICK, rise } from "$lib/motion";
   import Icon from "./Icon.svelte";
 
   /**
@@ -180,6 +181,8 @@
     bind:this={list}
     id={listId}
     class="list scroll"
+    in:rise={{ duration: QUICK, y: -4 }}
+    out:rise={{ duration: QUICK, y: -4, easing: exit }}
     role="listbox"
     aria-label={label ?? "Options"}
     style="left:{box.left}px; width:{box.width}px; {box.drop ? 'top' : 'bottom'}:{box.drop
@@ -247,7 +250,6 @@
     border-radius: var(--radius);
     background: var(--surface);
     box-shadow: var(--shadow);
-    animation: lift var(--quick) var(--ease);
   }
 
   .option {
@@ -270,12 +272,5 @@
 
   .option[aria-selected="true"] {
     font-weight: 500;
-  }
-
-  @keyframes lift {
-    from {
-      opacity: 0;
-      transform: translateY(-4px);
-    }
   }
 </style>

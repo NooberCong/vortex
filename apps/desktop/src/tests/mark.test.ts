@@ -3,23 +3,24 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { figure, MARK, parts } from "../../../../scripts/logo.mjs";
+import { AZURE, figure, MARK, parts, PLATE_RADIUS } from "../../../../scripts/logo.mjs";
 
 const root = process.cwd();
 const html = readFileSync(join(root, "index.html"), "utf8");
 const icon = readFileSync(join(root, "src-tauri", "icons", "vortex.svg"), "utf8");
+const chrome = readFileSync(join(root, "src", "components", "Mark.svelte"), "utf8");
 const tokens = readFileSync(join(root, "..", "..", "packages", "tokens", "tokens.css"), "utf8");
 
 /**
- * The mark exists in two files and is generated into both. These are the assertions that
- * make that safe.
+ * The mark exists in three files and is generated into all of them. These are the
+ * assertions that make that safe.
  *
  * The failure they catch is not hypothetical: `index.html` is hand-written apart from one
  * block, so the obvious thing to do when the splash needs a tweak is to edit the paths in
  * place — and then the icon on the taskbar and the figure on the boot screen are two
  * different drawings, which nobody notices because nobody sees them side by side.
  *
- * `npm run logo` regenerates both.
+ * `npm run logo` regenerates all three.
  */
 describe("the mark", () => {
   it("is the same drawing in the splash and in the icon", () => {
@@ -36,7 +37,28 @@ describe("the mark", () => {
     expect(icon, "the icon is stale — run `npm run logo`").toContain(`d="${figure()}"`);
   });
 
-  it("is stroked at one weight in both", () => {
+  it("is the icon in the titlebar, not a drawing of it", () => {
+    // The whole point of putting it in the corner is that it is recognisably the thing on
+    // the taskbar, so every value here has to be the icon's own: the plate, its corner, its
+    // hue, and the same twenty-four strokes at the same weight.
+    expect(chrome, "the titlebar mark is stale — run `npm run logo`").toContain(
+      `d="${figure()}"`,
+    );
+    expect(chrome).toContain(`rx="${PLATE_RADIUS}" fill="${AZURE}"`);
+    expect(chrome).toContain(`stroke-width="${MARK.w}"`);
+  });
+
+  it("turns the figure and not the plate", () => {
+    // A rotating rounded square is a spinner. The group is what makes the plate hold still,
+    // so its absence would be a silent change from "the icon, animated" to "a busy widget".
+    const inside = chrome.slice(chrome.indexOf('<g class="figure">'), chrome.indexOf("</g>"));
+    expect(inside, "the figure is not in its own group").toContain(`d="${figure()}"`);
+    expect(chrome.indexOf("<rect"), "the plate is inside the group").toBeLessThan(
+      chrome.indexOf('<g class="figure">'),
+    );
+  });
+
+  it("is stroked at one weight in the splash and the icon", () => {
     expect(html).toContain(`stroke-width="${MARK.w}"`);
     expect(icon).toContain(`stroke-width="${MARK.w}"`);
   });

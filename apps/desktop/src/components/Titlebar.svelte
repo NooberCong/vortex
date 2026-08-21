@@ -4,8 +4,10 @@
 
   import { aggregate } from "$lib/aggregate.svelte";
   import { native } from "$lib/ipc";
+  import { CALM, fade } from "$lib/motion";
   import { queue } from "$lib/store.svelte";
   import Icon from "./Icon.svelte";
+  import Mark from "./Mark.svelte";
   import Sparkline from "./Sparkline.svelte";
 
   /**
@@ -23,13 +25,25 @@
   interface Props {
     onAdd: () => void;
     onSearch: () => void;
+    onSettings: () => void;
     searching: boolean;
+    settingsOpen: boolean;
   }
 
-  const { onAdd, onSearch, searching }: Props = $props();
+  const { onAdd, onSearch, onSettings, searching, settingsOpen }: Props = $props();
 
   const mac = navigator.userAgent.includes("Mac");
   const speed = $derived(rate(queue.throughput));
+
+  let field: HTMLInputElement | null = $state(null);
+
+  /**
+   * The field is always in the DOM now, so `autofocus` — which only fires on insertion —
+   * no longer applies. Ctrl-F has to hand it the keyboard itself.
+   */
+  $effect(() => {
+    if (searching) field?.focus();
+  });
 
   async function control(action: "minimise" | "maximise" | "close"): Promise<void> {
     if (!native) return;
@@ -42,37 +56,92 @@
 </script>
 
 <header class="titlebar" data-tauri-drag-region class:mac>
-  <span class="wordmark" data-tauri-drag-region>vortex</span>
+  <div class="brand" data-tauri-drag-region>
+    <Mark spinning={queue.running > 0} />
+    <span class="wordmark" data-tauri-drag-region>vortex</span>
+  </div>
 
   <div class="readout" data-tauri-drag-region>
     {#if queue.running > 0}
-      <span class="speed num">{speed}</span>
-      <Sparkline values={aggregate.history} width={72} height={18} faint />
+      <!--
+        The readout arrives and leaves whenever the queue starts and stops, which on a busy
+        machine is often. It fades rather than blinks; its slot is reserved either way, so
+        nothing beside it moves.
+      -->
+      <div class="figures" transition:fade={{ duration: CALM }}>
+        <span class="speed num">{speed}</span>
+        <Sparkline values={aggregate.history} width={72} height={18} faint />
+      </div>
     {/if}
   </div>
 
   <div class="controls">
-    {#if searching}
-      <!-- svelte-ignore a11y_autofocus -->
+    <!--
+      The button and the field are one control that changes width, not two controls that
+      swap. Swapping meant 150 px of bar appearing between two frames and everything to the
+      right of it jumping left — for the shortcut people reach for most often after Add.
+      Both are always here; which one is lit is opacity, and the box they share is what
+      moves. `inert` keeps the dark one out of the tab order and out of the accessibility
+      tree, so there is still only ever one thing here to find.
+    -->
+    <div class="find" class:open={searching}>
+      <button
+        class="button quiet square"
+        title="Filter (Ctrl F)"
+        aria-label="Filter downloads"
+        inert={searching}
+        onclick={onSearch}
+      >
+        <Icon name="search" />
+      </button>
       <input
         class="search num"
         type="search"
-        autofocus
         placeholder="Filter"
         aria-label="Filter downloads"
+        inert={!searching}
+        bind:this={field}
         bind:value={queue.search}
         onblur={() => queue.search === "" && onSearch()}
         onkeydown={(e) => e.key === "Escape" && (queue.search = "", onSearch())}
       />
-    {:else}
-      <button class="button quiet square" title="Filter (Ctrl F)" onclick={onSearch}>
-        <Icon name="search" />
-      </button>
-    {/if}
+    </div>
 
-    <button class="button" onclick={onAdd}>
+    <!--
+      Settings was the last entry in the left column, under the second divider, and it was
+      the only thing in there that was not a way of looking at the list. It is a sheet, so
+      it was never really a destination either — `aria-current` says it is open, not that
+      you are somewhere.
+    -->
+    <button
+      class="button quiet square"
+      title="Settings (Ctrl ,)"
+      aria-label="Settings"
+      aria-current={settingsOpen}
+      onclick={onSettings}
+    >
+      <Icon name="settings" />
+    </button>
+
+    <!--
+      An icon, like the two beside it. It was a bordered button reading "+ Add", which is
+      the one control in the bar that says what it does — and that is exactly what made it
+      heavy: a filled 68 px block against a 40 px bar whose whole job is to stay out of the
+      way of the list. Three squares of the same size read as one set of tools rather than
+      as a button with two ornaments next to it.
+
+      It keeps the last position, so the bar still ends on the thing you came to press, and
+      it keeps its name in the tooltip and the accessible label. It is the only glyph in
+      the set that is a plus, and a plus in the corner of a window that holds a list has
+      exactly one meaning.
+    -->
+    <button
+      class="button quiet square"
+      title="New download (Ctrl N)"
+      aria-label="New download"
+      onclick={onAdd}
+    >
       <Icon name="plus" />
-      Add
     </button>
   </div>
 
@@ -109,6 +178,13 @@
     padding-left: 84px;
   }
 
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    flex: none;
+  }
+
   .wordmark {
     font-size: var(--t-body);
     font-weight: 600;
@@ -122,11 +198,17 @@
     display: flex;
     align-items: center;
     justify-content: flex-start;
-    gap: var(--s3);
     min-width: 0;
     /* Reserved: the readout appears and disappears as the queue starts and stops, and the
-       Add button must not move when it does. */
+       controls must not move when it does. */
     height: 100%;
+  }
+
+  .figures {
+    display: flex;
+    align-items: center;
+    gap: var(--s3);
+    min-width: 0;
   }
 
   .speed {
@@ -151,16 +233,53 @@
     color: var(--text-dim);
   }
 
-  .search {
-    cursor: text;
-    width: 180px;
+  /* Open, not "here". The sheet is over the window; this only says which one it is. */
+  .square[aria-current="true"] {
+    background: color-mix(in oklab, var(--text) 8%, transparent);
+    color: var(--text);
+  }
+
+  /* The box the two of them share. Closed it is exactly a square button; open it is a
+     field, and the controls to its right slide over rather than jump. */
+  .find {
+    position: relative;
+    flex: none;
+    width: 30px;
     height: 30px;
+    transition: width var(--calm) var(--ease);
+  }
+
+  .find.open {
+    width: 180px;
+  }
+
+  .find > .square {
+    position: absolute;
+    inset: 0 auto 0 0;
+    transition: opacity var(--quick) var(--ease);
+  }
+
+  .find.open > .square {
+    opacity: 0;
+  }
+
+  .search {
+    position: absolute;
+    inset: 0;
+    cursor: text;
+    width: 100%;
     padding: 0 var(--s3);
     border: 1px solid var(--rule-strong);
     border-radius: var(--radius-sm);
     background: var(--surface);
     font-size: var(--t-body);
     font-family: var(--font-ui);
+    opacity: 0;
+    transition: opacity var(--quick) var(--ease);
+  }
+
+  .find.open .search {
+    opacity: 1;
   }
 
   .search::placeholder {

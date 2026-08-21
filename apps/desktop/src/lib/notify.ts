@@ -22,6 +22,10 @@ import { queue, reveal } from "./store.svelte";
  * because the plugin's desktop path cannot report a click. A notification that says a
  * download finished and then does nothing when you click it is a worse promise than no
  * notification at all — so clicking one raises the window and opens that job's row.
+ *
+ * That last path outgrew notifications: the extension's popup can ask for a job too, and
+ * it arrives by a different route to the same place. So [`watchReveals`] owns "something
+ * outside this window named a job", whatever named it.
  */
 
 /** Asked for once per session, and remembered even if the answer is no. */
@@ -56,19 +60,36 @@ export async function announce(event: Event): Promise<void> {
       : `Failed · ${outcome.error}`;
 
   if (!(await permitted())) return;
-  // Fire and forget: the click comes back through `watchClicks`, not through this call.
+  // Fire and forget: the click comes back through `watchReveals`, not through this call.
   await invoke("notify", { job: event.job, title: name, body });
 }
 
 /**
- * Wires the click on a notification to the job it was about.
+ * Wires everything outside the window that can name a job to the job it named.
  *
- * The native side has already raised the window by the time this runs — that part cannot
- * wait for a webview — so all that is left is the part only the list knows how to do.
+ * Two things arrive on this channel and they mean the same sentence — a click on a
+ * finished transfer's toast, and a `Reveal` the extension sent through the daemon, which
+ * reaches this process as `vortex-app --reveal <id>`. The native side has already raised
+ * the window by the time either gets here; all that is left is the part only the list
+ * knows how to do.
+ *
+ * The **cold** case cannot be an event. A `--reveal` that started this process is parsed
+ * before the webview exists, so emitting it then would be shouting into an empty room; it
+ * is read as state instead, exactly as `connected()` is and for the same reason. `reveal`
+ * holds the id until the job turns up, because on a cold start the list has not arrived
+ * yet either.
  */
-export async function watchClicks(): Promise<() => void> {
+export async function watchReveals(): Promise<() => void> {
   if (!native) return () => {};
-  return listen<JobId>("vortex://notification", (message) => {
+  const stop = await listen<JobId>("vortex://reveal", (message) => {
     void reveal(message.payload);
   });
+  // After the listener, never before: a warm second instance can emit while this is still
+  // resolving, and an id read here that the listener then misses would be dropped twice.
+  void invoke<JobId | null>("requested")
+    .then((job) => {
+      if (job !== null) void reveal(job);
+    })
+    .catch(() => {});
+  return stop;
 }

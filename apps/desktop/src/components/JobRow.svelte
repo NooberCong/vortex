@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { bytes, eta, percent, rate, ratio } from "@vortex/proto";
+  import { bytes, eta, moment, percent, rate, ratio, when } from "@vortex/proto";
 
   import * as act from "$lib/actions";
   import { label, note, primaryAction } from "$lib/copy";
-  import { expand, needsAttention, queue, type Job } from "$lib/store.svelte";
+  import { CALM, exit, fold } from "$lib/motion";
+  import { expand, isDone, needsAttention, queue, type Job } from "$lib/store.svelte";
   import ExpandedRow from "./ExpandedRow.svelte";
   import Icon from "./Icon.svelte";
   import SegmentMap from "./SegmentMap.svelte";
@@ -21,6 +22,22 @@
    * actions share one fixed slot. The row does not reflow when the speed goes from 9 to
    * 12 MB/s, when the ETA drops a digit, or when the pointer arrives
    * (05 §Numbers that don't lie or twitch).
+   *
+   * The row ends on **when** — the date and the time, both, right-aligned so that the
+   * stamps make a column down the edge of the list. Inline at the end of the meta line they
+   * would start at a different x on every row, which is the difference between a field you
+   * can scan and a field you have to read. It is the last thing on the least important line,
+   * in the faintest ink there is, because it is the answer to a question you only ask about
+   * one row at a time — and it is the answer the app had no way to give at all while Done
+   * was a section you switched to.
+   *
+   * The row folds open when it arrives and folds away when it goes, so the rows under it
+   * close the gap rather than jump into it — but only when the change is one row. Whether
+   * this one counts is not the row's judgement to make and it is not the row's information
+   * either, so it asks the store: `queue.animating` is false for the flush that follows a
+   * filter change, a page, or the daemon's opening list, and the reasoning is written
+   * there. A transition reads its options once, at the moment it starts, which is exactly
+   * the moment that answer is true.
    */
 
   interface Props {
@@ -84,6 +101,20 @@
       : `${complete} complete${frame?.connections ? `, ${frame.connections} connections` : ""}`,
   );
 
+  /**
+   * The moment this row is *about*: when it finished if it did, and otherwise when it
+   * started. One field, one meaning — "when" — which is what lets it be a column with no
+   * heading over it. A row that showed a start time for one job and a finish time for the
+   * next under the same alignment would be two facts wearing one costume.
+   *
+   * `finishedAt` can be missing on a job the daemon retired without one; falling back to the
+   * start is better than a gap, and it is never more than a download's length wrong.
+   */
+  const at = $derived(isDone(state) ? (view.finishedAt ?? view.createdAt) : view.createdAt);
+  const stamp = $derived(when(at));
+  /** The whole instant, for the tooltip and for the screen reader. */
+  const exact = $derived(moment(at));
+
   function toggle(): void {
     queue.selected = job.id;
     void expand(job.id);
@@ -96,7 +127,15 @@
   }
 </script>
 
-<li class="row" data-job={job.id} class:selected class:expanded class:attention={needsAttention(state)}>
+<li
+  class="row"
+  data-job={job.id}
+  class:selected
+  class:expanded
+  class:attention={needsAttention(state)}
+  in:fold={{ duration: queue.animating ? CALM : 0 }}
+  out:fold={{ duration: queue.animating ? CALM : 0, easing: exit }}
+>
   <!--
     The body is the click and keyboard target; the actions are its sibling rather than its
     children, because a button inside a button is not a thing a screen reader can describe.
@@ -108,7 +147,9 @@
     role="button"
     tabindex="0"
     aria-expanded={expanded}
-    aria-label="{view.filename}. {label(state) ?? 'Downloading'}. {description}"
+    aria-label="{view.filename}. {label(state) ?? 'Downloading'}. {description}. {isDone(state)
+      ? 'Finished'
+      : 'Started'} {exact}"
     onclick={toggle}
     onkeydown={keys}
     onfocus={() => (queue.selected = job.id)}
@@ -130,6 +171,15 @@
         {#if i > 0}<span class="dot" aria-hidden="true">·</span>{/if}
         <span class="field" class:num={part.num}>{part.text}</span>
       {/each}
+      <!--
+        Outside the `each`, and deliberately: it takes no separator dot, because it is not
+        the next item in a sentence — it is a column, pushed to the far edge. The row's
+        `aria-label` already says the same thing in words, so this is `aria-hidden` rather
+        than read twice.
+      -->
+      {#if stamp}
+        <span class="when num" title={exact} aria-hidden="true">{stamp}</span>
+      {/if}
     </div>
   </div>
 
@@ -189,13 +239,25 @@
   /*
    * Attention is a 2 px left edge. Never a fill and never a background (05 §Tokens) — a
    * red row is an alarm, and a job waiting for an answer is not an alarm.
+   *
+   * Drawn on every row and shown on one, rather than created when it is needed: a
+   * pseudo-element that does not exist yet cannot fade in, and this is the app's only red.
+   * Something turning red between two frames is a jolt; something turning red over 180 ms
+   * is the row telling you it needs you. Same information, and the second one does not
+   * make you look twice to check what changed.
    */
-  .row.attention::before {
+  .row::before {
     content: "";
     position: absolute;
     inset: 0 auto 0 0;
     width: 2px;
     background: var(--attention);
+    opacity: 0;
+    transition: opacity var(--calm) var(--ease);
+  }
+
+  .row.attention::before {
+    opacity: 1;
   }
 
   .line {
@@ -262,6 +324,18 @@
   .dot {
     color: var(--text-faint);
     flex: none;
+  }
+
+  /*
+   * The right-hand column. `margin-left: auto` rather than a grid, because everything to
+   * its left is a variable number of variable-width fields and the only thing that has to
+   * line up is this.
+   */
+  .when {
+    flex: none;
+    margin-left: auto;
+    padding-left: var(--s3);
+    color: var(--text-faint);
   }
 
   /*

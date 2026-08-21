@@ -309,4 +309,63 @@ describe("download takeover", () => {
 
     expect(sent.some((c) => c.cmd === "submit")).toBe(false);
   });
+
+  /**
+   * The other half of `erase`.
+   *
+   * This channel takes the browser's own record of the download away and then refetches it
+   * somewhere the browser cannot see, which from the page is indistinguishable from a link
+   * that did nothing — and the response to a link that did nothing is to click it again
+   * (03 §2 — the acknowledgement).
+   */
+  describe("the receipt", () => {
+    let told: Array<[number, unknown]>;
+
+    beforeEach(() => {
+      told = [];
+      vi.spyOn(browser.tabs, "sendMessage").mockImplementation(
+        async (tabId: number, message: unknown) => {
+          told.push([tabId, message]);
+          return undefined as never;
+        },
+      );
+    });
+
+    it("names the file, in the tab the download came from", async () => {
+      fakeDaemon(willing);
+      await created();
+
+      expect(erased).toEqual([1]);
+      expect(told).toEqual([[7, { kind: "captured", filename: "big.iso" }]]);
+    });
+
+    it("falls back to the URL where the browser never resolved a name", async () => {
+      // Firefox has no `onDeterminingFilename`, which this suite models by deleting it.
+      // The leaf of the URL is what is left, and it is better than "a download".
+      fakeDaemon(willing);
+      await created({ ...ITEM, url: "https://cdn.example.com/a/b/report%20final.pdf" } as Item);
+
+      expect(told[0]?.[1]).toEqual({ kind: "captured", filename: "report final.pdf" });
+    });
+
+    it("says nothing when nothing was taken", async () => {
+      // Every branch that leaves the browser's download alone must also leave the page
+      // alone. A receipt for a handover that did not happen is worse than silence.
+      state = "complete";
+      fakeDaemon(willing);
+      await created();
+
+      expect(told).toEqual([]);
+    });
+
+    it("does not fail the handover when the page cannot be reached", async () => {
+      // A PDF viewer, an internal page, a tab that closed. The download still moved.
+      vi.spyOn(browser.tabs, "sendMessage").mockRejectedValue(new Error("no receiving end"));
+      const sent = fakeDaemon(willing);
+
+      await created();
+
+      expect(sent.some((c) => c.cmd === "submit")).toBe(true);
+    });
+  });
 });

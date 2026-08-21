@@ -8,9 +8,11 @@ import * as host from "@/src/host";
 import * as intercept from "@/src/intercept";
 import * as media from "@/src/media";
 import type { Internal, PopupState } from "@/src/messages";
+import * as queue from "@/src/queue";
 import * as renewal from "@/src/renewal";
 import * as settings from "@/src/settings";
 import * as takeover from "@/src/takeover";
+import * as toolbar from "@/src/toolbar";
 
 /**
  * The background: a sensor and a remote control, never a downloader.
@@ -41,31 +43,40 @@ export default defineBackground(() => {
   intercept.watch();
   takeover.watch();
 
-  // ── Channels 3 and 4, and the overlay they feed ───────────────────────────────
-  if (MEDIA_CAPTURE) {
-    media.listen();
-    browser.runtime.onMessage.addListener((message, sender, respond) => {
-      // `true` keeps the channel open for an async reply; anything else closes it, so
-      // the branches that answer nothing must not return a promise.
-      return answer(message as Internal, sender, respond);
-    });
-  }
+  // ── The popup, the overlay, and the page ──────────────────────────────────────
+  // Registered in every build. The popup is the only way back from "not on this site" and
+  // the only place the daemon light is drawn, and it needs an answer whether or not this
+  // package has streaming in it (03 §Store strategy).
+  browser.runtime.onMessage.addListener((message, sender, respond) => {
+    // `true` keeps the channel open for an async reply; anything else closes it, so
+    // the branches that answer nothing must not return a promise.
+    return answer(message as Internal, sender, respond);
+  });
+
+  // ── Channels 3 and 4 ──────────────────────────────────────────────────────────
+  if (MEDIA_CAPTURE) media.listen();
 
   // ── Renewal: the resilience feature that needs both halves to exist ───────────
   renewal.listen();
 
-  // ── Settings, and the daemon's own announcements of them ──────────────────────
+  // ── What the daemon says about itself ─────────────────────────────────────────
   host.onEvent((event) => {
     if (event.event === "settingsChanged") settings.adopt(event.settings);
+    // Structural job events are broadcast to every client, subscribed or not, so the
+    // toolbar count is kept by listening rather than by asking (`src/queue.ts`).
+    void queue.adopt(event);
   });
 
   browser.alarms.create("liveness", { periodInMinutes: 1 });
   browser.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name !== "liveness") return;
-    // A `Ping` that comes back costs nothing; one that does not drops the dead port so
-    // the next real command reconnects instead of failing.
-    void host.reachable().then((up) => {
-      if (!up) host.reset();
+    // `List` rather than `Ping`, and it earns its round trip twice: an answer is proof of
+    // life at least as strong as a pong, and it is also how the badge catches up on every
+    // event broadcast while the worker was evicted. No answer clears the badge — which
+    // `queue.list` does itself — and drops the dead port, so the next real command
+    // reconnects instead of failing.
+    void queue.list().then((jobs) => {
+      if (jobs === null) host.reset();
     });
   });
 
@@ -84,6 +95,9 @@ export default defineBackground(() => {
   // The first wake of a session is not `onStartup` — an install, an update, or an
   // eviction all land here instead, and each of them needs the settings just as much.
   void settings.refresh();
+  // And the badge. `storage.session` carries the count across an eviction, but not across
+  // a browser restart, and never across anything that happened while the worker was gone.
+  void queue.list();
 });
 
 /**
@@ -103,12 +117,71 @@ async function welcome(): Promise<void> {
 }
 
 /**
- * Handles a message from a content script.
+ * Handles a message from a content script or from the popup.
  *
  * Returns `true` only for the branches that will call `respond` later; returning it
  * unconditionally leaves every message channel open until it times out.
+ *
+ * Split in two along the store line. Everything here exists in every build; everything in
+ * `heard` belongs to channels 3–5 and must be *absent* from the store package rather than
+ * merely unreachable in it, which is what the single `if (MEDIA_CAPTURE)` below buys —
+ * fold that call away and nothing references `media` any more, so none of it is emitted
+ * (`tests/store-build.test.ts`).
  */
 function answer(
+  message: Internal,
+  sender: { tab?: { id?: number; title?: string; url?: string } },
+  respond: (value: unknown) => void,
+): boolean {
+  switch (message.kind) {
+    case "siteCapture": {
+      void setCapture(message.origin, message.on);
+      return false;
+    }
+
+    case "popupState": {
+      void describe(message.tabId).then(respond);
+      return true;
+    }
+
+    case "jobs": {
+      // The popup, polling itself. `list` also trues the badge up against the answer, so
+      // an open panel is one more thing that keeps the count honest.
+      void queue.list().then(respond);
+      return true;
+    }
+
+    case "reveal": {
+      // Straight through. The daemon starts or raises `vortex-app`; this process has no
+      // way to reach a window, and no business knowing whether there is one.
+      host.send({ cmd: "reveal", job: message.job });
+      return false;
+    }
+
+    case "popup": {
+      // The receipt was clicked. `openPopup` is young enough to be missing on browsers
+      // this extension supports (`src/toolbar.ts`), and a click that lands on nothing is
+      // the failure the receipt exists to prevent — so where the panel cannot be opened,
+      // ask for the window instead. It is a bigger gesture than was asked for, and it
+      // shows the same transfers.
+      void toolbar.open().then((opened) => {
+        if (!opened) host.send({ cmd: "reveal", job: null });
+      });
+      return false;
+    }
+
+    default:
+      return MEDIA_CAPTURE ? heard(message, sender, respond) : false;
+  }
+}
+
+/**
+ * The messages that only exist where streaming does (03 §Store strategy).
+ *
+ * Reached through exactly one `MEDIA_CAPTURE` test, in `answer`'s default branch, so that
+ * the store build drops this function and everything it names along with it.
+ */
+function heard(
   message: Internal,
   sender: { tab?: { id?: number; title?: string; url?: string } },
   respond: (value: unknown) => void,
@@ -134,21 +207,11 @@ function answer(
       return false;
     }
 
-    case "siteCapture": {
-      void setCapture(message.origin, message.on);
-      return false;
-    }
-
-    case "popupState": {
-      void describe(message.tabId).then(respond);
-      return true;
-    }
-
     case "orphan": {
       // The page has a player and nothing on the wire explained it. `probePage` applies
       // the same capture, denylist and opt-out checks as every other channel, and the
       // daemon's extractor is what actually looks at the URL.
-      if (tabId === undefined || !MEDIA_CAPTURE) return false;
+      if (tabId === undefined) return false;
       void media.probePage(message.pageUrl, tabId);
       return false;
     }
@@ -160,7 +223,7 @@ function answer(
       // subframe — routinely someone else's code — cannot influence it. `probePage`
       // then applies the identical capture, denylist and opt-out checks, and drops the
       // ask outright if a ladder is already known for the tab.
-      if (tabId === undefined || !MEDIA_CAPTURE) return false;
+      if (tabId === undefined) return false;
       const pageUrl = sender.tab?.url;
       if (!pageUrl) return false;
       void media.probePage(pageUrl, tabId);
@@ -171,7 +234,7 @@ function answer(
       // Metadata only, and only ever a hint: the URLs the page fetched that channel 3
       // could not attribute. They go through the same probe as anything else, so a wrong
       // guess costs one parse and produces no overlay.
-      if (tabId === undefined || !MEDIA_CAPTURE) return false;
+      if (tabId === undefined) return false;
       for (const url of message.signal.urls.slice(0, 4)) {
         media.inspect({
           url,
@@ -260,11 +323,12 @@ async function setCapture(origin: string, on: boolean): Promise<void> {
  * rather than as fast.
  */
 async function describe(tabId: number): Promise<PopupState> {
-  const [config, tab, daemon, candidates] = await Promise.all([
+  const [config, tab, daemon, candidates, jobs] = await Promise.all([
     settings.current(),
     describeTab(tabId),
     host.status(),
     MEDIA_CAPTURE ? media.known(tabId) : Promise.resolve([]),
+    queue.list(),
   ]);
   return {
     origin: originOf(tab.pageUrl),
@@ -273,6 +337,7 @@ async function describe(tabId: number): Promise<PopupState> {
     captureOff: !config.enableCapture,
     daemon,
     candidates,
+    jobs,
   };
 }
 

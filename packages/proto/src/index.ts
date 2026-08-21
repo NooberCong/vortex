@@ -6,7 +6,8 @@
 // `tests/index.test.ts` fails if it ever falls behind the generated directory.
 
 export { MAX_FRAME, PROTOCOL_VERSION } from "./bindings/constants";
-export { bytes, duration, estimate, eta, percent, ratio, rate } from "./format";
+export { bytes, duration, estimate, eta, moment, percent, ratio, rate, took, when } from "./format";
+export { isTerminal, label } from "./copy";
 
 export type { Category } from "./bindings/Category";
 export type { Command } from "./bindings/Command";

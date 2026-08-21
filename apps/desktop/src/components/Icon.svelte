@@ -28,14 +28,25 @@
     folder: "M2 4.5h4l1.2 1.6H14v6.4H2z",
     reveal: "M9 3h4v4M13 3L8 8M12.5 9.5v3.5H3V3.5h3.5",
     plus: "M8 3.5v9M3.5 8h9",
-    settings: "M8 5.6A2.4 2.4 0 108 10.4 2.4 2.4 0 008 5.6zM8 1.8v1.6M8 12.6v1.6M14.2 8h-1.6M3.4 8H1.8M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1M12.4 12.4l-1.1-1.1M4.7 4.7L3.6 3.6",
+    // Faders, not a gear. This used to be a ringed circle with eight spokes, which is a
+    // perfectly good gear next to the word "Settings" and reads as a *sun* on its own —
+    // and it is on its own now that it is an icon button in the titlebar, one along from a
+    // magnifier, exactly where a theme toggle would sit. Two tracks and two knobs cannot be
+    // read as anything else at 14 px.
+    //
+    // The knobs are closed subpaths and the tracks are not, so `FILLED` gives solid knobs
+    // on hairline rails: filling a straight line encloses no area and paints nothing.
+    settings:
+      "M2.5 4.8h11M2.5 11.2h11" +
+      "M11.5 4.8a1.5 1.5 0 10-3 0 1.5 1.5 0 103 0" +
+      "M7.5 11.2a1.5 1.5 0 10-3 0 1.5 1.5 0 103 0",
     chevron: "M5.5 6.5L8 9l2.5-2.5",
     search: "M7.2 2.6a4.6 4.6 0 100 9.2 4.6 4.6 0 000-9.2zM10.6 10.6L13.6 13.6",
     minimise: "M3.5 8h9",
     maximise: "M3.5 3.5h9v9h-9z",
   };
 
-  const FILLED: Glyph[] = ["play"];
+  const FILLED: Glyph[] = ["play", "settings"];
 </script>
 
 <svg

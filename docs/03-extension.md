@@ -147,6 +147,127 @@ outside enterprise policy, and asking for a permission the code cannot use is a 
 `BLOCKING_WEBREQUEST` folds to a literal at build time, so the Chrome bundle does not
 contain this path at all.
 
+### 2b — The acknowledgement
+
+Both channels above end by taking the browser's own record of the download away: channel 2
+cancels the `DownloadItem` and then **erases** it, and pre-emption cancels the response
+before one is ever created. That is what makes the handoff clean, and it is also the worst
+thing about it, because of what the user sees:
+
+```
+click a link  →  the download bubble flickers  →  nothing, anywhere
+```
+
+There is no interrupted row to inspect and no entry in the browser's list, so the honest
+reading of that sequence is *the download failed*. The honest response to a download that
+failed is to click the link again — which runs the whole handoff a second time and produces
+a duplicate job. **Silence here is not a missing nicety; it is a bug that costs the user
+bandwidth.**
+
+So a takeover says three things, in descending order of how reliably it can say them.
+
+**The toolbar badge** (`src/toolbar.ts`, `src/queue.ts`) is the floor, and the only one of the
+three that always works. Both browsers put their own download indicator in the toolbar a few
+pixels from the extensions area; that is where a decade has taught people to look after
+clicking a link, and it is the indicator Vortex just took away. It needs no permission, it
+survives an evicted worker, and it is there for the cases the other two cannot reach: a
+download started from a PDF viewer, from a `file://` page, from a tab that closed behind
+itself, or from an origin the content script is excluded from.
+
+It counts **unfinished** jobs, not moving ones — a paused download is still one the user is
+expecting — and it counts what the *daemon* says it has rather than what this extension
+submitted, so a handoff that reached `Submit` and then failed inside the daemon leaves no
+phantom on the toolbar. That is fed by the structural events (`JobAdded`,
+`JobStateChanged`, `JobFinished`, `JobRemoved`) which the daemon broadcasts to every client
+regardless of subscription, reconciled against a full `List` whenever the count could have
+drifted: a fresh worker, the liveness alarm, an opened popup. **There is deliberately no
+`Subscribe`.** `Summary` scope delivers a frame per job at 2 Hz, which would keep the MV3
+service worker permanently awake to animate a number nobody is looking at.
+
+It is achromatic. `--attention` is the only colour the tokens allow outside the segment map
+and it means something is wrong; a download starting is not wrong (05 §The one rule). The
+signal is that a badge is on an icon that normally carries none.
+
+**The in-page receipt** (`src/receipt/`) is the one that names the file, which is the part
+that actually answers the user's question — "a download started" is not news, "*that*
+download started" is. A small card in the bottom-right of the page the click came from, in
+a closed shadow root, for four seconds:
+
+```
+                                   ┌──────────────────────────────┐
+                                   │ ↓  Downloading in Vortex   › │
+                                   │    ubuntu-24.04.2-live.iso   │
+                                   └──────────────────────────────┘
+```
+
+Five properties, each of them a decision:
+
+- **The whole card is one button, and it opens the popup.** A card that announces a file and
+  then cannot be followed is a dead end; the popup is where that same file is a row with a
+  bar under it, and it is the panel the user would otherwise have to go and find. Not a
+  small *View* target in the corner — a card that is mostly not the control it looks like is
+  worse than one that is entirely the control it looks like. The `›` carries the affordance
+  statically, because nobody hovers something they have been told is about to leave in order
+  to discover whether it is a button.
+
+  It cannot open a popup itself: `action.openPopup` is an extension API and a content script
+  is not the extension. The press goes out as `{ kind: "popup" }` and the background calls it
+  (`src/toolbar.ts`). **That API is young enough to be missing on browsers Vortex supports** —
+  Chrome 127+, Firefox 118+, against a `strict_min_version` of 115 — and a content-script
+  message does not carry user activation, which older Firefox demanded. So `toolbar.open()`
+  returns a boolean rather than throwing, and where it says `false` the background asks for
+  `Reveal { job: null }` instead. That is a bigger gesture than was asked for and it shows
+  the same transfers, which is the right way round: a click that lands on nothing is exactly
+  the failure this card exists to prevent.
+- **It cannot swallow the click that summoned it.** Inert for 500 ms after it appears —
+  longer than the fade-in — because it arrives unasked in the corner of a page someone is
+  using, a few hundred milliseconds after they clicked something, and a control that
+  materialises under a moving cursor can take a click meant for the page behind it. Nobody
+  aims at something that was not there half a second ago, so a click inside that window was
+  already on its way somewhere else and should land there. The host element stays
+  `pointer-events: none !important` regardless; only the card arms.
+- **It counts rather than stacks.** Five links clicked in five seconds are one card saying
+  *5 downloads in Vortex*, not five cards. A batch handover is exactly what a download
+  manager is for. Each handover re-arms the guard, because each one was a separate click.
+- **It leaves by itself**, with no dismiss button, because a control implies a decision and
+  there is none here — but it waits under the cursor. A card that faded out from under
+  somebody reaching for it would be a control that punishes being used.
+- **It is sent by `handoff.hand`, from both channels.** A receipt shown on Chrome and not on
+  Firefox is the same class of divergence the rest of that module exists to prevent — one
+  that survives review because both halves look correct in isolation.
+
+It is **out of the page's tab order** (`tabindex="-1"`). A control that inserts itself into
+someone's tabbing unannounced and then disappears four seconds later is a worse citizen than
+one that cannot be tabbed to, and the keyboard-reachable route to the same panel — the
+toolbar button — is what this card is a shortcut for rather than a replacement of.
+
+The name is derived locally (the browser's resolved filename, else the `Content-Disposition`
+hint, else the URL leaf) rather than waited for from `JobAdded`. The daemon derives a better
+one (04 §8), but the receipt's whole value is being on screen *before* the user has decided
+the click failed.
+
+**The popup's transfer list** is the third, and it is where a handover can be found by name
+a minute later. See §The popup.
+
+### 2c — `Reveal`
+
+A row in that list is clickable, and so is the *Open Vortex* button under it. Neither can do
+anything directly: the extension lives in a browser, the window lives in `vortex-app`, and
+the only thing the two share is the daemon. So the click goes out as
+`Reveal { job: Option<JobId> }`, and the daemon starts `vortex-app --reveal <id>` beside
+itself.
+
+That one path covers both cases without the daemon having to tell them apart — a question it
+could not answer anyway, since the app connects over the same endpoint every other client
+does. If no window is open, one opens. If one is already open, the app's single-instance
+plugin hands the arguments to it and the second process exits without drawing anything.
+
+The window then does what only the list can: move the filter if the job is not under the
+current one, select the row, and expand it. A **cold** start cannot be told by an event —
+the arguments are parsed before the webview exists — so the frontend reads them as state on
+mount, exactly as it reads `connected()`, and holds the id until the job actually turns up
+in a list that is still one round trip away.
+
 ### 3 — Manifest sniffing
 
 `onBeforeRequest` + `onHeadersReceived` flag:
@@ -442,6 +563,82 @@ Rules that keep it from being obnoxious:
 
 **Non-video downloads do not get an overlay.** They get the desktop New Download sheet
 (05 §Screens), because that is where a save path, a name, and a category belong.
+
+---
+
+## The popup
+
+The toolbar panel, and the only surface in the extension that exists in every build — the
+store package has no overlay at all, and this is what it has instead.
+
+It exists because the overlay could not be the only way in. *Not on this site* removes the
+overlay, which made it a one-way door: from that moment every capture path returned silently
+for that origin, and the only control that could have undone it was the thing that had just
+deleted itself. Nothing on the page said why.
+
+Four sections, in the order somebody actually asks the questions:
+
+1. **Is Vortex working at all?** The daemon light — `ready`, `stopped` or `missing`, never a
+   boolean, because "start the app" and "you do not have the app" are different sentences
+   with different buttons under them. `missing` is only ever asserted on evidence (a native
+   host manifest the platform says is not there), and it is the one case that gets a *Get
+   Vortex* button: the extension installs on its own, and on its own it does nothing.
+2. **What is it doing right now?** The transfers, below.
+3. **Is it switched on here?** The site switch, which is the only way back on. It writes to
+   the daemon's settings, not to extension storage, so one opt-out lives in one place and is
+   visible in all three of the places somebody might look for it. Disabled when the daemon is
+   not answering — a switch that lies about what it did is worse than one that says it
+   cannot.
+4. **What did it find?** Every confirmed stream on this tab, with its ladder, on the same
+   one-click-per-rung rule the overlay uses so the two surfaces cannot teach different
+   habits.
+
+### The transfer list
+
+Unfinished jobs, newest first, at most five and then a count of the rest, each one a button
+that opens that job in the app (§2c). Under them, *Open Vortex*, which does the same with no
+job named.
+
+It is **deliberately meagre**: a filename, a state, a byte count and a 2 px rule. No speed,
+no ETA, no segment map. Two reasons, and they point the same way.
+
+The first is mechanical. Speed and ETA live on `SummaryFrame`, which means a `Subscribe`,
+which means 2 Hz per job into a service worker whose whole cost model is that it sleeps after
+thirty idle seconds. So the panel polls `List` while it is open — roughly once a second,
+stopping when the popup is destroyed on blur — and renders what a `JobView` already carries.
+`JobView.completed` is updated by the daemon on every progress event even though it is not
+broadcast, so the bytes are current; nothing shown here is a stale number dressed up as a
+live one.
+
+The second is that the segment map is the one thing in Vortex worth being remembered for
+(05 §Signature), and a 380 px reimplementation of it would be a worse copy competing with
+the real one. The panel's job is to say *that* a transfer exists, name it, and be one click
+from the window that draws it properly. Its progress rule is achromatic for the same reason:
+a rounded percentage is not the segment map, and colouring it would be borrowing the
+signature's colour for a summary of it.
+
+The list re-renders **only its own rows** on each poll. The rest of the panel is redrawn
+wholesale, which is right for a window that is open for a few seconds — but doing it here
+would take the *Added to Vortex* a rung is showing out from under the pointer.
+
+### The panel arrives
+
+The browser opens this window the instant the button is clicked, and it cannot be filled in
+that instant: the active tab has to be found and the background worker has to be woken, which
+under MV3 is sometimes the slowest thing that happens all session (§Service worker lifetime).
+So the frame is blank and then, tens of milliseconds later, fully furnished — which reads as
+a stall followed by a jolt, and reads *worse* the longer the wait was.
+
+Six pixels and 200 ms per section, each one a beat behind the one above, turns that into a
+panel unfolding. It is settled inside a quarter of a second; it is not a performance, it is
+the difference between content that appeared and content that was placed. Only ever on the
+first draw — toggling the site switch redraws the whole panel, and replaying an entrance for
+that would claim the window had just opened when it had not.
+
+Everything else here follows 05 §Motion, including the three per cent a press takes off
+whatever is pressed. The progress rule is the one thing that stays still on purpose: it is
+repainted on a poll roughly once a second, and easing between two of those samples would draw
+a speed that is an artefact of the polling rather than of the transfer.
 
 ---
 

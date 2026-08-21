@@ -10,16 +10,14 @@
 //! that is added here is keeping the handle and waiting on it. The plugin stays for the
 //! permission prompt, which is a macOS and mobile concern and is where it belongs.
 //!
-//! What a click does is deliberately small: bring the window back, and name the job. The
-//! frontend decides what "show me that one" means — which filter has to change, whether
+//! What a click does is deliberately small: bring the window back, and name the job on
+//! `crate::REVEAL` — the same channel the extension's `Reveal` arrives on, because it is
+//! the same sentence. The frontend decides what "show me that one" means — which filter has to change, whether
 //! the row opens, where the list scrolls — because those are questions about the list, and
 //! the list lives there.
 
 use tauri::{AppHandle, Emitter};
 use vortex_proto::JobId;
-
-/// A `JobId`, sent when the user clicks a finished transfer's notification.
-pub const ACTIVATED: &str = "vortex://notification";
 
 /// Shows one notification and routes the click on it.
 ///
@@ -58,7 +56,7 @@ pub fn notify(app: AppHandle, job: JobId, title: String, body: String) {
                 let handle = app.clone();
                 let _ = app.run_on_main_thread(move || {
                     crate::chrome::reveal(&handle);
-                    let _ = handle.emit(ACTIVATED, job);
+                    let _ = handle.emit(crate::REVEAL, job);
                 });
             });
         });

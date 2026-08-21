@@ -50,7 +50,12 @@
 
   /* ── Motion ───────────────────────────────────────────────────────────── */
   /* Everything except the shatter moves in 120–180 ms or not at all. */
+  /* Two curves, and the asymmetry between them is the whole trick: a thing arriving
+     decelerates into place, because the eye has to find it; a thing leaving accelerates
+     away, because the eye is already on what replaced it. Both are in `motion.ts` as
+     functions too, for the transitions Svelte has to drive from JavaScript. */
   --ease: cubic-bezier(0.2, 0, 0, 1);
+  --exit: cubic-bezier(0.4, 0, 1, 1);
   --quick: 120ms;
   --calm: 180ms;
 

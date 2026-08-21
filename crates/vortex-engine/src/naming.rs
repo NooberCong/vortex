@@ -163,7 +163,7 @@ pub fn from_page_title(title: &str) -> String {
     sanitize(if cleaned.is_empty() { title } else { &cleaned })
 }
 
-/// Guessed from extension first, then MIME. The sidebar's `kind` grouping depends on this
+/// Guessed from extension first, then MIME. The filter bar's `kind` grouping depends on this
 /// being boringly predictable.
 pub fn categorize(filename: &str, mime: Option<&str>) -> Category {
     let ext = Path::new(filename)

@@ -1,0 +1,167 @@
+/*
+ * The takeover receipt.
+ *
+ * Loaded into a closed shadow root, so nothing here can reach the page and nothing in the
+ * page can reach it. `:host` carries the tokens; every value below comes from
+ * `@vortex/tokens`, which is why this looks like Vortex rather than like a browser
+ * extension.
+ *
+ * Achromatic throughout. The only colour in the file is the focus ring, which is
+ * `--focus` because that is what a focus ring is for everywhere else in Vortex — and it
+ * is here for a `:focus-visible` that a mouse press does not raise, so in practice this
+ * card is grey and a hairline and nothing else.
+ */
+
+:host {
+  all: initial;
+  position: fixed;
+  /* One below the overlay. On a page with a player, a download can be handed over while a
+     badge is up, and the badge is the one that can be clicked. */
+  z-index: 2147483645;
+  font-family: var(--font-ui);
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+/*
+ * The corner the overlay's fallback pill uses, so the two never introduce a third place
+ * where Vortex speaks from.
+ *
+ * The whole card is one button — there is one thing to ask for here, and a card with a
+ * small *View* target in the corner of it would be a card that is mostly not the control
+ * it looks like. It opens Vortex's popup, which is where the file this card just named is
+ * a row with a bar under it.
+ *
+ * **It does not accept a click until `data-live` says so**, which is half a second after
+ * it appears. That is the one rule in this file about safety rather than looks: this box
+ * arrives unasked, in a corner of a page someone is using, a few hundred milliseconds
+ * after they clicked something — and a control that materialises under a moving cursor can
+ * take a click meant for the page behind it. The guard is in `index.ts`; the two rules
+ * that implement it are here.
+ */
+.card {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  max-width: 340px;
+  padding: var(--s3) var(--s4);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  /* A `<button>` takes none of these from its ancestors; the UA sheet gets there first. */
+  font-family: inherit;
+  font-size: var(--t-body);
+  line-height: 1.45;
+  text-align: left;
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: none;
+  user-select: none;
+
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity var(--calm) var(--ease),
+    transform var(--calm) var(--ease),
+    border-color var(--quick) var(--ease);
+}
+
+.card[data-show="true"] {
+  opacity: 1;
+  transform: none;
+}
+
+.card[data-live="true"] {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/*
+ * Border and chevron only. The lift the overlay's pill uses is not available here: the
+ * entrance and the exit are both `transform`, and a hover that competed with them would
+ * make the card jump on its way in.
+ */
+.card[data-live="true"]:hover {
+  border-color: var(--rule-strong);
+}
+.card[data-live="true"]:hover .go {
+  color: var(--text-dim);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The same arrow the overlay's badge and the popup's rungs use. One glyph for "this is
+   going to be a file on your disk", everywhere Vortex says it. */
+.arrow {
+  flex: none;
+  /* Optically centred on the first line rather than boxed with it: the glyph's ink sits
+     low in its line box, and the label beside it is what the eye aligns to. */
+  margin-top: 1px;
+  color: var(--text-dim);
+}
+
+/*
+ * The mark that says this is a way through rather than a notice.
+ *
+ * It carries the whole affordance. Hover is not discoverable on something that has
+ * announced it is about to leave, and nobody hovers a receipt to find out whether it is a
+ * button — so the static state has to say it, in one glyph, at the weight of a hairline.
+ */
+.go {
+  flex: none;
+  /* Pinned to the right edge and centred on the pair of lines rather than on the first
+     one, so a two-word filename and a forty-character one put it in the same place. */
+  margin-left: auto;
+  align-self: center;
+  color: var(--text-faint);
+  transition: color var(--quick) var(--ease);
+}
+
+.copy {
+  min-width: 0;
+}
+
+.what {
+  font-weight: 500;
+}
+
+/*
+ * The filename, which is the whole reason this says anything at all — "a download started"
+ * is not news, "*that* download started" is.
+ *
+ * Ellipsised on one line rather than wrapped: a receipt is glanced at, and a
+ * three-line hash of a filename would make a quiet box into a loud one. The full name is
+ * in the app.
+ */
+.name {
+  font-family: var(--font-num);
+  font-size: var(--t-meta);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Motion is the only thing removed under the preference, never the message. Somebody who
+ * has asked their system for less animation has not asked to stop being told where their
+ * download went.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition: none;
+    transform: none;
+  }
+}

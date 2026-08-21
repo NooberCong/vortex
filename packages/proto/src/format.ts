@@ -100,3 +100,91 @@ function threeSigFigs(v: number): string {
   // A trailing zero in a live readout twitches as much as a proportional digit does.
   return s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s;
 }
+
+/* ── Moments ─────────────────────────────────────────────────────────────────
+ *
+ * Unlike everything above these are not shared with `fmt.rs`. The daemon logs and the CLI
+ * print instants in full, because a log line has to be unambiguous a week later on someone
+ * else's machine; a row in a list has to be *scannable*, which is a different job and
+ * usually a shorter string. Nothing here has a Rust counterpart to disagree with.
+ *
+ * `locale` is a parameter with no default rather than a hard-coded format so that the
+ * clock follows the machine's — a desktop app that shows 14:32 to somebody whose system
+ * says 2:32 PM has decided it knows better. Tests pass one explicitly; nothing else does.
+ */
+
+/** A `JobView` timestamp, which the daemon sends as whole seconds. */
+const at = (unix: number): Date => new Date(unix * 1000);
+
+/**
+ * A moment, as a date and a time.
+ *
+ * ```
+ *   this year      3 Sep, 14:32
+ *   before that    3 Sep 2024, 14:32
+ * ```
+ *
+ * Both halves, on every row, in the same shape every time. An earlier version of this was a
+ * ladder — the clock time for today, then `Yesterday`, then a weekday, then a date — on the
+ * theory that each rung should say only as much as it took to separate a row from its
+ * neighbours. It reads well and it answers the wrong question: a row saying `Yesterday` has
+ * told you which day and taken the time away, and a row saying `14:32` has told you the time
+ * and made you work out the day. The one thing a stamp in a list is for is being *the* fact,
+ * whole, without the reader having to reconstruct the other half from the row's position.
+ *
+ * The year is the single exception, and it is not a rung: it appears when it is a different
+ * year, which is the only time it distinguishes anything. Everything else is a fixed shape,
+ * so the column stays a column.
+ *
+ * The ordering, the separator and the twelve-or-twenty-four-hour clock are the machine's,
+ * not ours — a desktop app that shows `14:32` to somebody whose system says `2:32 PM` has
+ * decided it knows better.
+ */
+export function when(
+  unix: number | null | undefined,
+  now: Date = new Date(),
+  locale?: string | string[],
+): string {
+  if (unix === null || unix === undefined || !Number.isFinite(unix)) return "";
+  const then = at(unix);
+  return then.toLocaleString(locale, {
+    day: "numeric",
+    month: "short",
+    ...(then.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * The same moment, in full. For the expanded row, and for the tooltip on the short one.
+ *
+ * Every abbreviation {@link when} makes is recoverable here, which is the only thing that
+ * makes the abbreviating safe.
+ */
+export function moment(
+  unix: number | null | undefined,
+  locale?: string | string[],
+): string {
+  if (unix === null || unix === undefined || !Number.isFinite(unix)) return "";
+  return at(unix).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/**
+ * How long something took, quantised exactly like {@link eta}.
+ *
+ * The same shape for time-until and time-taken on purpose: `4m 20s` means four minutes and
+ * twenty seconds wherever it appears, and a second duration format would be a second thing
+ * to learn to read.
+ *
+ * Empty when the pair does not describe a finished span — no end, or an end before the
+ * start, which is a clock that went backwards rather than a download that took negative
+ * time.
+ */
+export function took(from: number, to: number | null | undefined): string {
+  if (to === null || to === undefined || !Number.isFinite(to) || !Number.isFinite(from)) {
+    return "";
+  }
+  if (to < from) return "";
+  return eta(to - from);
+}

@@ -28,7 +28,7 @@
     </p>
   {:else if filtered}
     <p class="display">Nothing here.</p>
-    <p class="line">Try another section, or clear the filter.</p>
+    <p class="line">Try another category, or clear the search.</p>
   {:else}
     <p class="display">Nothing downloading.</p>
     <p class="line">

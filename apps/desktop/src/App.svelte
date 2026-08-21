@@ -7,14 +7,15 @@
   import { primaryAction } from "$lib/copy";
   import { daemon, native } from "$lib/ipc";
   import { match, type Intent } from "$lib/keys";
-  import { announce, watchClicks } from "$lib/notify";
+  import { CALM, exit, rise } from "$lib/motion";
+  import { announce, watchReveals } from "$lib/notify";
   import { expand, queue } from "$lib/store.svelte";
   import { applyAppearance } from "$lib/theme";
+  import Filters from "./components/Filters.svelte";
   import JobList from "./components/JobList.svelte";
   import NewDownload from "./components/NewDownload.svelte";
   import RemoveDownload from "./components/RemoveDownload.svelte";
   import Settings from "./components/Settings.svelte";
-  import Sidebar from "./components/Sidebar.svelte";
   import Titlebar from "./components/Titlebar.svelte";
 
   /**
@@ -89,7 +90,7 @@
         void daemon.send({ cmd: "getSettings" }).catch(() => {});
       });
     void daemon.onLink((up) => (queue.connected = up)).then((off) => stops.push(off));
-    void watchClicks().then((off) => stops.push(off));
+    void watchReveals().then((off) => stops.push(off));
     void daemon
       .onTray((intent) => void (intent === "pauseAll" ? act.pauseAll() : act.resumeAll()))
       .then((off) => stops.push(off));
@@ -142,10 +143,14 @@
   });
 
   function step(delta: number): void {
-    const rows = queue.visible;
-    if (rows.length === 0) return;
-    const at = rows.findIndex((job) => job.id === queue.selected);
-    const next = at < 0 ? (delta > 0 ? 0 : rows.length - 1) : at + delta;
+    if (queue.rows.length === 0) return;
+    const at = queue.rows.findIndex((job) => job.id === queue.selected);
+    const next = at < 0 ? (delta > 0 ? 0 : queue.rows.length - 1) : at + delta;
+    // Walking off the bottom of a page is the same request as scrolling to it, and the
+    // arrow key has to be able to make it: a list whose keyboard stops at row forty is a
+    // list the keyboard cannot reach the end of.
+    if (next >= queue.rows.length) queue.more();
+    const rows = queue.rows;
     const row = rows[Math.min(rows.length - 1, Math.max(0, next))];
     if (row) queue.selected = row.id;
   }
@@ -239,12 +244,19 @@
 <div class="app" class:dropping>
   <Titlebar
     {searching}
+    settingsOpen={settings}
     onAdd={() => ((settings = false), (adding = true))}
     onSearch={() => (searching = !searching)}
+    onSettings={() => (settings = !settings)}
   />
 
+  <!--
+    One screen. There was a 200 px column here holding a filter list and a Settings link;
+    the filters are a bar over the list they filter and Settings is an icon in the bar
+    above that, which leaves the window as the thing it is for.
+  -->
   <main>
-    <Sidebar settingsOpen={settings} onSettings={() => (settings = !settings)} />
+    <Filters />
     <JobList />
   </main>
 
@@ -266,7 +278,12 @@
       voice — `EngineError::user_message` writes it — so this only has to show it and get
       out of the way.
     -->
-    <div class="toast" role="status">
+    <div
+      class="toast"
+      role="status"
+      in:rise={{ duration: CALM }}
+      out:rise={{ duration: CALM, easing: exit }}
+    >
       <span>{queue.problem}</span>
       <button class="button quiet" onclick={() => (queue.problem = null)}>Dismiss</button>
     </div>
@@ -287,6 +304,7 @@
 
   main {
     display: flex;
+    flex-direction: column;
     flex: 1;
     min-height: 0;
   }
@@ -316,13 +334,5 @@
     border-radius: var(--radius);
     background: var(--surface);
     box-shadow: var(--shadow);
-    animation: rise var(--calm) var(--ease);
-  }
-
-  @keyframes rise {
-    from {
-      opacity: 0;
-      transform: translate(-50%, 8px);
-    }
   }
 </style>

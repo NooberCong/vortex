@@ -254,10 +254,18 @@ const CATALOGUE: Array<{
   { filename: "keynote-2160p.mp4", host: "stream.example.tv", category: "Video", total: 3_400_000_000, state: { kind: "failed", error: "The link expired." } },
 ];
 
-/** Enough for the 40-job frame-rate case, built by varying the catalogue rather than repeating it. */
+/**
+ * The queue, built by varying the catalogue rather than repeating it.
+ *
+ * More than the forty of the frame-rate case, and the list still renders exactly forty:
+ * one page (`store.svelte.ts`, `PAGE`). Everything past the first ten is completed, so the
+ * measurement is unchanged — the same forty rows, the same handful of them moving — while
+ * the tail is long enough that `vite dev` shows the paging footer at the bottom of the
+ * Done section instead of a list that happens to end.
+ */
 function catalogue(): Simulated[] {
   const jobs: Simulated[] = [];
-  for (let i = 0; i < 40; i += 1) {
+  for (let i = 0; i < 96; i += 1) {
     const base = CATALOGUE[i % CATALOGUE.length]!;
     const round = Math.floor(i / CATALOGUE.length);
     const total = Math.round(base.total * (1 + round * 0.37));

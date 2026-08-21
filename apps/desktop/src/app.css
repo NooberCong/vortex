@@ -151,7 +151,8 @@ select {
   white-space: nowrap;
   transition:
     background var(--quick) var(--ease),
-    border-color var(--quick) var(--ease);
+    border-color var(--quick) var(--ease),
+    transform var(--quick) var(--ease);
 }
 
 .button:hover:not(:disabled) {
@@ -160,6 +161,24 @@ select {
 
 .button:active:not(:disabled) {
   background: var(--bg);
+}
+
+/*
+ * A press moves the thing pressed.
+ *
+ * Three per cent, which is under a pixel on a 30 px control — not a squash, and not a
+ * bounce: it goes down under the finger and comes back on the same curve as everything
+ * else. It is the cheapest thing in the interface and it is most of what separates a
+ * window that feels made from a window that feels drawn.
+ *
+ * Behind both motion switches rather than left to the blanket rule below, which would
+ * apply the scale and refuse to animate it — a control that jumps to 97 % and jumps back
+ * is worse than one that does not move at all.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion="reduced"]) .button:active:not(:disabled) {
+    transform: scale(0.97);
+  }
 }
 
 .button:disabled {

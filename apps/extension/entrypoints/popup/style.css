@@ -146,7 +146,9 @@ section {
   font: inherit;
   font-weight: 500;
   cursor: pointer;
-  transition: opacity var(--quick) var(--ease);
+  transition:
+    opacity var(--quick) var(--ease),
+    transform var(--quick) var(--ease);
 }
 
 .get:hover {
@@ -154,6 +156,130 @@ section {
 }
 
 .get:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ── Transfers ──────────────────────────────────────────────────────────── */
+
+/*
+ * What Vortex is doing right now.
+ *
+ * Achromatic, including the progress rule. This is the one place in the extension where
+ * that costs something: the app draws transferring bytes in colour because the segment map
+ * is data, and a 380 px hairline is not the segment map — it is a rounded percentage. It
+ * would be borrowing the signature's colour for a summary of it (05 §The one rule).
+ */
+.transfers .rows:not(:empty) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.transfer {
+  display: block;
+  width: 100%;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--quick) var(--ease),
+    background var(--quick) var(--ease),
+    transform var(--quick) var(--ease);
+}
+
+.transfer:hover {
+  border-color: var(--rule-strong);
+}
+
+.transfer:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* One line, ellipsised. A row is scanned, and the full name is in the app — which is
+   where this row goes when it is clicked. */
+.transfer .name {
+  font-size: var(--t-name);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer .meta {
+  font-family: var(--font-num);
+  font-size: var(--t-meta);
+  color: var(--text-faint);
+}
+
+/*
+ * The rule. 2 px, full width, and it does not animate: it is repainted on a poll roughly
+ * once a second, and a transition between two of those samples would draw a speed that is
+ * an artefact of the polling rather than of the transfer.
+ */
+.bar {
+  height: 2px;
+  margin-top: var(--s2);
+  border-radius: 1px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.bar::before {
+  content: "";
+  display: block;
+  height: 100%;
+  width: var(--done, 0%);
+  background: var(--text-dim);
+}
+
+/* A size the server never sent. An empty track would be a claim that nothing has arrived,
+   so there is no track at all. */
+.bar[data-unknown="true"] {
+  background: none;
+}
+
+.note.more {
+  padding-top: var(--s2);
+}
+
+/*
+ * The way into the window, present whether or not anything is transferring — this panel
+ * summarises and the app is where a queue is actually worked with.
+ *
+ * Outlined rather than filled: `.get` is the only filled control in this file because
+ * installing the missing half is the one thing the panel ever needs someone to do.
+ */
+.open {
+  display: block;
+  width: 100%;
+  margin-top: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color var(--quick) var(--ease),
+    border-color var(--quick) var(--ease),
+    transform var(--quick) var(--ease);
+}
+
+.open:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.open:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -280,7 +406,9 @@ section {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background var(--quick) var(--ease);
+  transition:
+    background var(--quick) var(--ease),
+    transform var(--quick) var(--ease);
 }
 
 .ladder .rung:first-child {
@@ -389,4 +517,66 @@ section {
   font-weight: 450;
   color: var(--text-dim);
   margin-bottom: var(--s1);
+}
+
+/* ── Motion ─────────────────────────────────────────────────────────────── */
+
+/*
+ * The panel arrives.
+ *
+ * A toolbar popup is a window the browser opens the instant it is clicked, and this one
+ * cannot fill it in that instant: the tab has to be found and the background worker has to
+ * be woken, which under MV3 can be the slowest thing that happens all session. So the
+ * frame is blank and then, some tens of milliseconds later, fully furnished — which reads
+ * as a stall followed by a jolt, and reads worse the *longer* the wait was.
+ *
+ * Six pixels and 200 ms per section, each one a beat behind the one above, turns that into
+ * a panel unfolding. The stagger is small enough that the whole thing is settled inside a
+ * quarter of a second; it is not a performance, it is the difference between content that
+ * appeared and content that was placed.
+ *
+ * `data-entering` is set once, by `main.ts`, and taken off when the last section has
+ * landed. Everything after that — toggling the site switch redraws this whole panel — is a
+ * change to something already on screen, and replaying an entrance for it would say the
+ * panel had just opened when it had not.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  #root[data-entering] > * {
+    animation: arrive 200ms var(--ease) both;
+  }
+
+  #root[data-entering] > *:nth-child(2) {
+    animation-delay: 40ms;
+  }
+  #root[data-entering] > *:nth-child(3) {
+    animation-delay: 80ms;
+  }
+  #root[data-entering] > *:nth-child(4) {
+    animation-delay: 120ms;
+  }
+  /* Anything past the fourth lands with the fourth. A ladder of eight streams should not
+     take half a second to finish arriving. */
+  #root[data-entering] > *:nth-child(n + 5) {
+    animation-delay: 160ms;
+  }
+
+  /*
+   * A press moves the thing pressed — the same three per cent the app uses. Every one of
+   * these is a control that does something somewhere else: opens a window, starts a
+   * download, switches a site off. The feedback is the only part of that the user sees
+   * immediately.
+   */
+  .transfer:active,
+  .rung:active,
+  .open:active,
+  .get:active {
+    transform: scale(0.97);
+  }
+}
+
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }

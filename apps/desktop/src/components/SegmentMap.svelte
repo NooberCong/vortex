@@ -147,8 +147,29 @@
    * moves twice a second, which is its whole budget.
    */
   $effect(() => {
-    if (!visible || !perLane || reducedMotion()) return;
-    return onFrame(draw);
+    if (!visible || !perLane || reducedMotion() || !canvas) return;
+
+    /*
+     * The block this map lives in, if that block is one that folds away (`data-fold`, set
+     * by whatever owns the transition). Resolved once, here, rather than per frame.
+     *
+     * Svelte pauses a block's effects *before* it plays the outro, so for the 180 ms a
+     * fold takes, this component is on screen and its props are deriveds that nothing is
+     * maintaining any more — `draw` reads them and Svelte says so in the console, which is
+     * correct of it. Stopping is also just right: a map fading out has nothing left to
+     * say, and those frames belong to the fold.
+     *
+     * It has to be an attribute rather than a prop because by then no prop can change:
+     * inert effects do not re-run. `outrostart` is a DOM event on a DOM node, and DOM
+     * nodes do not care whether Svelte has finished with them.
+     */
+    const block = canvas.closest("[data-fold]");
+    let off: (() => void) | null = null;
+    off = onFrame((now) => {
+      if (block?.getAttribute("data-fold") === "leaving") off?.();
+      else draw(now);
+    });
+    return () => off?.();
   });
 
   // Only visible rows render (05 §Rendering). A list of forty with six on screen costs six.

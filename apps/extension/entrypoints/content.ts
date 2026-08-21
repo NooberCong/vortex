@@ -6,12 +6,14 @@ import { excludeMatches } from "@/src/denylist";
 import { post, type ToPage } from "@/src/messages";
 import { EVERY, Orphans } from "@/src/orphan";
 import { Overlay } from "@/src/overlay";
+import { Receipt } from "@/src/receipt";
 
 /**
  * The page agent.
  *
- * It does two things the background cannot, both of which need to be inside the page:
- * it draws the overlay, and it re-acquires an expired URL with the page's own credentials.
+ * It does three things the background cannot, all of which need to be inside the page: it
+ * draws the overlay, it draws the receipt for a download that has just been taken over,
+ * and it re-acquires an expired URL with the page's own credentials.
  *
  * It is inert until spoken to. On a page with no video it registers one message listener,
  * sends one message, and stops — which is the whole cost of having it everywhere.
@@ -38,6 +40,9 @@ export default defineContentScript({
 
   main(ctx) {
     let overlay: Overlay | null = null;
+    // Built on the first handover rather than on load. Most pages never see one, and an
+    // empty shadow root on every tab is a cost with no reader.
+    let receipt: Receipt | null = null;
     // Channel 5, constructed only where there is one — the store build has no streaming
     // code in it at all, and that is a property of the artifact rather than of its
     // behaviour (03 §Store strategy).
@@ -65,6 +70,19 @@ export default defineContentScript({
           if (incoming.candidates.length > 0) orphans?.attributed();
           ensure().show(incoming.candidates);
         }
+        return false;
+      }
+
+      if (incoming.kind === "captured") {
+        // In every build, including the store one: this is the receipt for generic HTTP
+        // capture, which is the only thing that package does (`src/receipt/index.ts`).
+        //
+        // Pressing it asks the background for the popup. It cannot open one from here —
+        // that is an extension API, and this script runs as the page.
+        receipt ??= new Receipt(() => {
+          void post({ kind: "popup" });
+        });
+        receipt.show(incoming.filename);
         return false;
       }
 
@@ -99,10 +117,14 @@ export default defineContentScript({
     }
 
     // A badge left on the page after the extension went away is a button that cannot do
-    // anything, which is worse than no button.
+    // anything, which is worse than no button — and the receipt is now one too. Both also
+    // hold timers, and a timer in an invalidated context is the thing that throws once a
+    // second for as long as the tab stays open.
     ctx.onInvalidated(() => {
       overlay?.destroy();
       overlay = null;
+      receipt?.destroy();
+      receipt = null;
     });
   },
 });

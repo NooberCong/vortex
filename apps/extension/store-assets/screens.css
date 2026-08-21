@@ -94,23 +94,31 @@ body::before {
 
 /* ── The popup, at a size someone can read ──────────────────────────────── */
 
+/*
+ * The popup, at its own size and then scaled up bodily.
+ *
+ * `height` is the popup's real content height, not a crop of it: the iframe does not size
+ * itself to its document, so this number has to be maintained alongside
+ * `entrypoints/popup/style.css`. Too small and the listing shows a panel sliced through
+ * the middle of a row, which reads as a rendering bug rather than as a product.
+ */
 .panel {
   justify-self: center;
   width: 380px;
-  height: 168px;
+  height: 336px;
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--bg);
   box-shadow: var(--shadow);
-  transform: scale(1.62);
+  transform: scale(1.28);
   transform-origin: center;
 }
 
 .panel iframe {
   display: block;
   width: 380px;
-  height: 168px;
+  height: 336px;
   border: 0;
 }
 

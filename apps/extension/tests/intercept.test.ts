@@ -333,4 +333,50 @@ describe("response pre-emption", () => {
     expect(await respond({ ...ATTACHMENT, incognito: true } as Response)).toEqual({});
     expect(sent).toEqual([]);
   });
+
+  /**
+   * The same receipt channel 2 owes, for the same reason and in the same words.
+   *
+   * This channel's advantage is that nothing is ever written and nothing appears in the
+   * browser's download list — which is also exactly what makes it indistinguishable, from
+   * the page, from a link that did nothing. The two channels must not differ in what they
+   * say about that, which is why `hand` is shared (`src/handoff.ts`).
+   */
+  describe("the receipt", () => {
+    let told: Array<[number, unknown]>;
+
+    beforeEach(() => {
+      told = [];
+      vi.spyOn(browser.tabs, "sendMessage").mockImplementation(
+        async (tabId: number, message: unknown) => {
+          told.push([tabId, message]);
+          return undefined as never;
+        },
+      );
+    });
+
+    it("names the file from the disposition, in the tab that asked for it", async () => {
+      fakeDaemon(willing);
+      await respond();
+      expect(told).toEqual([[7, { kind: "captured", filename: "big.iso" }]]);
+    });
+
+    it("says nothing about a response it let through", async () => {
+      fakeDaemon((command) =>
+        command.cmd === "probe"
+          ? { event: "error", message: "That link has expired." }
+          : willing(command),
+      );
+      expect(await respond()).toEqual({});
+      expect(told).toEqual([]);
+    });
+
+    it("has nowhere to draw for a response that belongs to no tab", async () => {
+      // `tabId` is -1 for a request the browser did not make on a tab's behalf. The badge
+      // is what covers that case, and it covers it whatever the page situation is.
+      fakeDaemon(willing);
+      await respond({ ...ATTACHMENT, tabId: -1 });
+      expect(told).toEqual([]);
+    });
+  });
 });

@@ -10,7 +10,7 @@
 
 import { browser } from "wxt/browser";
 
-import type { MediaCandidate, MediaSelection } from "@vortex/proto";
+import type { JobId, JobView, MediaCandidate, MediaSelection } from "@vortex/proto";
 import type { Link } from "./host";
 
 /** Background → content script. */
@@ -20,7 +20,16 @@ export type ToPage =
    * Re-acquire `url` in page context (03 §Handoff 3). The content script answers with the
    * URL the browser ended up at, or `null` if it could not get one.
    */
-  | { kind: "renew"; url: string };
+  | { kind: "renew"; url: string }
+  /**
+   * A download on this page has just been moved to Vortex (03 §2).
+   *
+   * The receipt the takeover owes the user. Both capture channels erase the browser's own
+   * download before refetching it, so from the page's side a click produced a flicker and
+   * then nothing at all — and the honest reading of that is "it failed", which is why
+   * people click again and get the file twice. This is the sentence that stops them.
+   */
+  | { kind: "captured"; filename: string };
 
 /** Content script → background. */
 export type FromPage =
@@ -57,7 +66,39 @@ export type FromPage =
    */
   | { kind: "framePlayer" }
   /** What the popup needs to draw itself, for the tab it was opened over. */
-  | { kind: "popupState"; tabId: number };
+  | { kind: "popupState"; tabId: number }
+  /**
+   * The transfer list again, while the popup is open.
+   *
+   * Polled rather than subscribed. `Summary` frames arrive at 2 Hz for every job in the
+   * queue and would keep the MV3 service worker awake for as long as anything was
+   * downloading — a background page that never sleeps, to animate a panel nobody is
+   * looking at (03 §Service worker lifetime). A popup lives for a few seconds and asks
+   * for itself.
+   */
+  | { kind: "jobs" }
+  /**
+   * "Open Vortex, and put this job in front of me."
+   *
+   * The extension cannot reach the window — they are two processes that share a daemon and
+   * nothing else — so this goes out as a `Reveal` and the daemon starts or raises the app.
+   * `null` is the bare "open Vortex" the popup's footer asks for.
+   */
+  | { kind: "reveal"; job: JobId | null }
+  /**
+   * "Show me the panel" — the takeover receipt has been clicked (03 §2b).
+   *
+   * It carries no job, and it is not a `reveal`: the card names a file the daemon has only
+   * just been told about, and the id for it arrives afterwards on a `JobAdded` broadcast
+   * that this message would have to race. What the click actually means is *the smaller*
+   * of the two asks — show me the list — and the popup is where that list already is,
+   * one click from the app for anyone who wants more.
+   *
+   * Only the background can honour it. `action.openPopup` is an extension API and a
+   * content script is not the extension; a page asking for it directly is a page opening
+   * browser UI, which is why the platform does not offer it there.
+   */
+  | { kind: "popup" };
 
 /**
  * The popup's answer to `popupState`.
@@ -82,6 +123,12 @@ export interface PopupState {
    */
   daemon: Link;
   candidates: MediaCandidate[];
+  /**
+   * Everything in the daemon's queue, so the first paint is not an empty panel that fills
+   * in a moment later. `null` is "the daemon did not answer", which is a different thing
+   * from an empty queue and is drawn differently.
+   */
+  jobs: JobView[] | null;
 }
 
 /**
@@ -123,5 +170,21 @@ export function post(message: Internal): Promise<unknown> {
     return browser.runtime.sendMessage(message).catch(() => undefined);
   } catch {
     return Promise.resolve(undefined);
+  }
+}
+
+/**
+ * Sends one message the other way, to a content script, and never throws either.
+ *
+ * The common failure is not a failure: plenty of tabs have no content script in them. The
+ * DRM denylist is in `exclude_matches`, a PDF viewer and an internal page are not pages
+ * this extension is in at all, and a tab can navigate away between the decision and the
+ * message. Every one of those is "nobody to tell", which is not worth reporting.
+ */
+export async function tell(tabId: number, message: ToPage): Promise<void> {
+  try {
+    await browser.tabs.sendMessage(tabId, message);
+  } catch {
+    // No content script in that tab. See above.
   }
 }

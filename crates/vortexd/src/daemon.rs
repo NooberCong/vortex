@@ -32,6 +32,12 @@ const TICK: Duration = Duration::from_millis(500);
 /// A client this far behind is not reading; the connection is dropped and it can reconnect
 /// and ask for the list again.
 pub(crate) const CLIENT_BACKLOG: usize = 256;
+/// How `Reveal` names a job to `vortex-app` on its command line.
+///
+/// `apps/desktop/src-tauri/src/lib.rs` reads this argument and the two spellings have to
+/// agree. Written twice for the same reason `--tray` is: the app does not depend on this
+/// crate, and each side names the other.
+const REVEAL_FLAG: &str = "--reveal";
 
 pub type ClientId = u64;
 
@@ -358,6 +364,7 @@ impl Daemon {
                 self.broadcast(Event::SettingsChanged { settings: applied });
             }
             Command::RenewedUrl { job, envelope } => self.renewed(job, envelope),
+            Command::Reveal { job } => self.reveal(client, job),
         }
     }
 
@@ -397,6 +404,35 @@ impl Daemon {
         self.persist(id);
         self.broadcast(Event::JobAdded { job: view });
         self.pump();
+    }
+
+    /// Brings the window up, on behalf of a client that has no way to do it itself.
+    ///
+    /// The extension is the caller that matters: it lives in a browser, the window lives
+    /// in `vortex-app`, and the only thing the two share is this daemon. Starting the app
+    /// covers both cases at once — not running, and running behind the browser — because
+    /// a second copy is folded into the first by the app's single-instance plugin.
+    ///
+    /// A job id is passed through as text and not looked up here. The window is the thing
+    /// that knows what "show me that one" means (which filter has to move, whether the row
+    /// opens), and a job the daemon has forgotten is a question for the list to answer
+    /// rather than a reason to refuse to open.
+    fn reveal(&mut self, client: ClientId, job: Option<JobId>) {
+        let id = job.map(|job| job.0.to_string());
+        let args = match &id {
+            Some(id) => vec![REVEAL_FLAG, id.as_str()],
+            None => Vec::new(),
+        };
+        if let Err(e) = vortex_ipc::open_app(&args) {
+            tracing::warn!("could not open the Vortex window: {e}");
+            self.send(
+                client,
+                Event::Error {
+                    message: "Vortex couldn't open its window. The app may not be installed."
+                        .to_owned(),
+                },
+            );
+        }
     }
 
     fn pause(&mut self, id: JobId) {

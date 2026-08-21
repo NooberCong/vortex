@@ -9,8 +9,9 @@
       product is a promise the product has to keep, and this way the promise is kept by
       construction. Change the popup and this changes with it.
 
-      What is shown is the store build — the header and the site switch, and no captured
-      media section, because `MEDIA_CAPTURE` is false in the package being submitted.
+      What is shown is the store build — the header, the transfers and the site switch, and
+      no captured media section, because `MEDIA_CAPTURE` is false in the package being
+      submitted.
 
       `?off` renders the switched-off state.
     -->
@@ -34,6 +35,17 @@
         </div>
         <div class="status" data-up="true">Ready</div>
       </div>
+      <section class="transfers">
+        <div class="eyebrow">1 transfer</div>
+        <div class="rows">
+          <button class="transfer" type="button">
+            <div class="name">ubuntu-24.04.2-live-server-amd64.iso</div>
+            <div class="meta">1.31 GB of 2.79 GB</div>
+            <div class="bar" style="--done: 47%"></div>
+          </button>
+        </div>
+        <button class="open" type="button">Open Vortex</button>
+      </section>
       <section>
         <div class="eyebrow">This site</div>
         <div class="origin">example.com</div>

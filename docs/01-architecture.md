@@ -83,6 +83,7 @@ enum Command {
     Subscribe(SubscriptionScope),  // Summary | Detail(JobId) | All
     GetSettings, SetSettings(Settings),
     RenewedUrl(JobId, RequestEnvelope),  // extension answering UrlExpired
+    Reveal(Option<JobId>),         // "open the window on this"  → see below
 }
 
 // daemon → client
@@ -103,6 +104,14 @@ enum Event {
 row subscribes to `Detail`, which carries the per-worker block bitmap at 20 Hz. An idle
 window costs the daemon nothing. This is the difference between a 0.3% and a 9% CPU floor
 with 40 jobs listed.
+
+**`Reveal` is the one command whose subject is a process rather than a job.** The extension
+lives in a browser and the window lives in `vortex-app`; the only thing they share is this
+daemon, so "show me that download" has to travel through it. The daemon starts
+`vortex-app --reveal <id>` beside itself and lets the app's single-instance plugin decide
+what a second copy means — which is how one path covers both "no window is open" and "the
+window is behind the browser" without the daemon having to tell them apart. It could not:
+the app connects over the same anonymous endpoint every other client does.
 
 ### `ProgressFrame` — the segment map on the wire
 

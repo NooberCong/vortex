@@ -14,7 +14,14 @@ import type { Decision, JobState, Resolution } from "@vortex/proto";
  * user_message` already writes them, in the same voice, because the daemon is the only
  * thing that knows what actually happened. What is here is the other half — the buttons a
  * `Decision` deserves, which the daemon deliberately does not decide.
+ *
+ * `label` is re-exported rather than written here: the extension popup names the same
+ * states in its own transfer rows, so the vocabulary moved to `@vortex/proto` where both
+ * can reach it. Every import site in this app still says `$lib/copy`, because that is
+ * where the words belong from here.
  */
+
+export { label } from "@vortex/proto";
 
 export interface Choice {
   label: string;
@@ -98,36 +105,6 @@ export function prompt(decision: Decision): Prompt {
           { label: "Cancel", resolution: { kind: "cancel" } },
         ],
       };
-  }
-}
-
-/**
- * The word for a state, in the vocabulary the buttons use.
- *
- * `downloading` is deliberately absent: the segment map is already moving and already the
- * only coloured thing on the row, and a label saying so would be the second time the row
- * said one thing (05 §The one rule).
- */
-export function label(state: JobState): string | null {
-  switch (state.kind) {
-    case "queued":
-      return "Queued";
-    case "probing":
-      return "Checking";
-    case "downloading":
-      return null;
-    case "stalled":
-      return "Retrying";
-    case "muxing":
-      return "Combining";
-    case "paused":
-      return "Paused";
-    case "needsDecision":
-      return "Needs you";
-    case "completed":
-      return "Downloaded";
-    case "failed":
-      return "Failed";
   }
 }
 

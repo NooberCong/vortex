@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { rate, ratio } from "@vortex/proto";
+  import { moment, rate, ratio, took } from "@vortex/proto";
   import type { Protocol, WorkerFrame } from "@vortex/proto";
+  import { untrack } from "svelte";
 
   import * as act from "$lib/actions";
   import { prompt } from "$lib/copy";
+  import { CALM, exit, fold } from "$lib/motion";
   import { channel } from "$lib/segments";
   import { queue, type Job } from "$lib/store.svelte";
   import Icon from "./Icon.svelte";
@@ -33,6 +35,28 @@
   const detail = $derived(job.detail);
   const frame = $derived(job.frame);
   const workers = $derived<WorkerFrame[]>(detail?.workers ?? []);
+
+  /** How long the transfer took, once there are two instants to put between. */
+  const elapsed = $derived(took(view.createdAt, view.finishedAt));
+  /**
+   * What each connection is doing, on the same 2 Hz clock as every other number in the
+   * window — read off the 20 Hz frame rather than sent separately, since the daemon has no
+   * per-worker summary and does not need one.
+   *
+   * The lane *list* stays live: a connection opening or closing is a change to what is on
+   * screen, and the map beside it shows the same thing in the same instant. It is only the
+   * figure that is held still long enough to read. A lane the sample has not caught up with
+   * yet falls back to its own frame, so a new connection arrives with a speed rather than
+   * with a dash.
+   */
+  let sampled = $state.raw(new Map<number, number>());
+  $effect(() => {
+    // The summary is the clock. Reading the frame under `untrack` is what keeps this at
+    // 2 Hz instead of running it again on every one of the twenty frames a second that
+    // arrive in between.
+    void job.summary;
+    sampled = new Map(untrack(() => job.detail?.workers ?? []).map((w) => [w.lane, w.bps]));
+  });
   const ceiling = $derived(queue.settings?.maxConnections ?? null);
   const decision = $derived(view.state.kind === "needsDecision" ? prompt(view.state.decision) : null);
   /**
@@ -62,7 +86,18 @@
   }
 </script>
 
-<div class="detail">
+<!--
+  `data-fold` is how the lane maps inside this block learn that it is going: they run on the
+  shared ticker and would otherwise keep drawing all the way through the collapse. See the
+  shimmer effect in `SegmentMap.svelte`.
+-->
+<div
+  class="detail"
+  data-fold="here"
+  in:fold={{ duration: CALM }}
+  out:fold={{ duration: CALM, easing: exit }}
+  onoutrostart={(event) => event.currentTarget.setAttribute("data-fold", "leaving")}
+>
   {#if decision}
     <!-- A question only the user can answer, in the interface's voice, with the fix
          attached. Never a code, never an apology (05 §Copy). -->
@@ -104,7 +139,7 @@
             <span class="lane num" style:color="var(--w{channel(worker.lane)})">
               w{worker.lane}
             </span>
-            <span class="speed num">{rate(worker.bps)}</span>
+            <span class="speed num">{rate(sampled.get(worker.lane) ?? worker.bps)}</span>
             <Sparkline values={worker.spark} channel={channel(worker.lane)} />
             {#if worker.stealingFrom}
               <!-- Named as well as drawn: the map shows the lease shrinking, and a user
@@ -140,6 +175,25 @@
       <dt class="micro">Retries</dt>
       <dd>{retries(view.retries.total, view.retries.recovered)}</dd>
 
+      <!--
+        The row's own stamp is one short word at the edge of the list, and it has to be — it
+        is a column in forty rows. Here there is a label in front of every value, so this is
+        where the abbreviating is undone: the whole instant, and the span between the two
+        instants, which is the number this product is actually about. A row that says
+        `4.9 GB` and `1m 12s` has made the argument for parallel connections without making
+        a claim.
+      -->
+      <dt class="micro">Started</dt>
+      <dd>{moment(view.createdAt)}</dd>
+
+      {#if view.finishedAt}
+        <dt class="micro">Finished</dt>
+        <dd>
+          {moment(view.finishedAt)}
+          {#if elapsed}<span class="dim">· took <span class="num">{elapsed}</span></span>{/if}
+        </dd>
+      {/if}
+
       {#if view.media?.containerNote}
         <dt class="micro">Container</dt>
         <dd>{view.media.containerNote}</dd>
@@ -167,15 +221,6 @@
     /* Its own gutter: the collapsed body above carries the row's padding, and this is a
        sibling of it rather than a child. Same 24 px, so the map lines up with the bar. */
     padding: var(--s2) var(--s5) var(--s5);
-    /* The expanded body is one 180 ms reveal, matching every other standard move. */
-    animation: open var(--calm) var(--ease);
-  }
-
-  @keyframes open {
-    from {
-      opacity: 0;
-      transform: translateY(-4px);
-    }
   }
 
   .prompt {

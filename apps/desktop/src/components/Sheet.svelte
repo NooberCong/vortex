@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
+  import { CALM, exit, fade, grow } from "$lib/motion";
   import Icon from "./Icon.svelte";
 
   /**
@@ -18,6 +19,14 @@
    * leaves, and focus returns to whatever had it. Half of that is invisible to a mouse
    * user and all of it is the difference between "keyboard accessible" and "keyboard
    * usable".
+   *
+   * It leaves the way it came, which it used to not. The enter was a CSS animation, and CSS
+   * cannot animate a node that is about to stop existing — so every Escape, every ×, every
+   * click on the scrim ended with the panel and the blur gone between two frames. That is
+   * the most-repeated moment in the app and it was the one with no motion in it at all.
+   * These are Svelte transitions instead, so both directions exist, and the way out runs on
+   * the faster curve (`motion.ts`): the answer has been given and the eye is already back
+   * on the list.
    */
 
   interface Props {
@@ -31,6 +40,16 @@
   const { title, onClose, children, wide = false }: Props = $props();
 
   let panel: HTMLElement | null = $state(null);
+
+  /**
+   * On its way out, and therefore no longer a target.
+   *
+   * A fading scrim is still a full-window hit area and a fading panel still has a live
+   * Cancel button in it. 180 ms is short, and it is long enough to eat the first click of
+   * whatever the user turned to next — so the moment either starts leaving, both stop
+   * catching anything.
+   */
+  let leaving = $state(false);
 
   const FOCUSABLE =
     'a[href],button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex]:not([tabindex="-1"])';
@@ -71,15 +90,26 @@
   a `click` handler here would catch it and close again before anything was drawn. The press
   that opened the sheet happened before the scrim existed, so it cannot reach it.
 -->
-<div class="scrim" role="presentation" onpointerdown={onClose}></div>
+<div
+  class="scrim"
+  class:leaving
+  role="presentation"
+  onpointerdown={onClose}
+  in:fade={{ duration: CALM }}
+  out:fade={{ duration: CALM, easing: exit }}
+  onoutrostart={() => (leaving = true)}
+></div>
 
 <div
   class="sheet"
   class:wide
+  class:leaving
   role="dialog"
   aria-modal="true"
   aria-label={title}
   bind:this={panel}
+  in:grow={{ duration: CALM }}
+  out:grow={{ duration: CALM, easing: exit }}
 >
   <header>
     <h2>{title}</h2>
@@ -98,8 +128,11 @@
     inset: 0;
     background: color-mix(in oklab, var(--bg) 62%, transparent);
     backdrop-filter: blur(2px);
-    animation: fade var(--calm) var(--ease);
     z-index: 10;
+  }
+
+  .leaving {
+    pointer-events: none;
   }
 
   .sheet {
@@ -115,7 +148,6 @@
     border: 1px solid var(--rule-strong);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow);
-    animation: rise var(--calm) var(--ease);
     transform: translate(-50%, -50%);
   }
 
@@ -154,20 +186,5 @@
     height: 28px;
     padding: 0;
     color: var(--text-dim);
-  }
-
-  /* Grows in place. The 2% is deliberately almost nothing: enough that the panel arrives
-     rather than appears, not enough to read as a zoom. */
-  @keyframes rise {
-    from {
-      transform: translate(-50%, -50%) scale(0.98);
-      opacity: 0;
-    }
-  }
-
-  @keyframes fade {
-    from {
-      opacity: 0;
-    }
   }
 </style>

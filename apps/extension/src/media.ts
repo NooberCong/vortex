@@ -28,7 +28,7 @@ import { describeTab, synthesise } from "./envelope";
 import * as hook from "./hook";
 import * as host from "./host";
 import * as ledger from "./ledger";
-import type { ToPage } from "./messages";
+import { tell } from "./messages";
 import * as settings from "./settings";
 
 const MANIFEST_PATH = /\.(m3u8|mpd)(\?|#|$)/i;
@@ -240,22 +240,13 @@ async function deliver(tabId: number, candidates: MediaCandidate[]): Promise<voi
     else merged.push(candidate);
   }
   await browser.storage.session.set({ [key]: merged });
-  await send(tabId, { kind: "candidates", candidates: merged });
+  await tell(tabId, { kind: "candidates", candidates: merged });
 }
 
 /** What a freshly-injected overlay asks for, after a worker restart or an SPA navigation. */
 export async function known(tabId: number): Promise<MediaCandidate[]> {
   const key = candidatesKey(tabId);
   return ((await browser.storage.session.get(key))[key] ?? []) as MediaCandidate[];
-}
-
-export async function send(tabId: number, message: ToPage): Promise<void> {
-  try {
-    await browser.tabs.sendMessage(tabId, message);
-  } catch {
-    // No overlay in that tab: it is on the denylist's `exclude_matches`, or the tab is
-    // showing a PDF or an internal page. Nothing to do and nothing to report.
-  }
 }
 
 /** Test seam. */

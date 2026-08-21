@@ -33,6 +33,14 @@ const EVENT: &str = "vortex://event";
 /// `{ connected: boolean }`. Separate from [`EVENT`] because it is about the wire rather
 /// than about a job, and the window reacts to it differently.
 const LINK: &str = "vortex://link";
+/// A `JobId` somebody outside the window asked to see.
+///
+/// Two things raise it and they mean the same sentence: a click on a finished transfer's
+/// notification ([`toast`]), and a `Reveal` the daemon turned into [`REVEAL_FLAG`] on this
+/// process's command line — which is how the browser extension reaches a window it cannot
+/// see. One name for one intent, so the frontend has one listener rather than two doing
+/// identical work.
+pub const REVEAL: &str = "vortex://reveal";
 /// How the login entry asks for a tray icon and no window.
 ///
 /// The same spelling lives in `vortex_setup::autostart::TRAY_FLAG`, which is the code that
@@ -40,10 +48,52 @@ const LINK: &str = "vortex://link";
 /// daemon and that one writes registry keys — so the string is in both places, and each
 /// says so.
 const TRAY_FLAG: &str = "--tray";
+/// How the daemon points this process at one job: `vortex-app --reveal 42`.
+///
+/// The same spelling lives in `crates/vortexd/src/daemon.rs`, which is the code that
+/// writes it. Neither crate depends on the other — that one is a daemon and this one is a
+/// window — so the string is in both places, and each side says so.
+const REVEAL_FLAG: &str = "--reveal";
 
 struct Bridge {
     primary: Arc<Link>,
     detail: Arc<Link>,
+}
+
+/// A job named on the command line, held until the webview is there to be told.
+///
+/// A cold `vortex-app --reveal 42` finishes parsing its arguments long before the webview
+/// has mounted a listener, so emitting [`REVEAL`] then would be shouting into an empty
+/// room. The frontend asks for this on mount instead — the same shape as [`connected`],
+/// and for the same reason: an edge that has already passed has to be readable as state.
+///
+/// Taken rather than read. A window that has already acted on it must not act again when
+/// the webview reloads.
+#[derive(Default)]
+struct Requested(std::sync::Mutex<Option<JobId>>);
+
+/// The job this process was started to show, if it was started to show one. Clears on read.
+#[tauri::command]
+fn requested(pending: State<'_, Requested>) -> Option<JobId> {
+    pending.0.lock().ok().and_then(|mut slot| slot.take())
+}
+
+/// The job id in `--reveal <id>`, if the arguments carry one.
+///
+/// Total by construction: no flag, no value after it, a value that is not a `u64` — every
+/// one of them is `None`. These arguments come from a daemon this process did not start
+/// and cannot vouch for, and the worst case has to be a window that opens without moving
+/// the list, never one that refuses to open.
+///
+/// Deliberately untested here, which is unusual for this repository and worth the
+/// sentence: this crate's `cargo test` binary does not load on Windows under a workspace
+/// build (`STATUS_ENTRYPOINT_NOT_FOUND`, before `main`), so a `#[cfg(test)] mod tests`
+/// added anywhere in `vortex-app` turns `cargo test --workspace` red for reasons that have
+/// nothing to do with the code in it. That is why the function above is written to have no
+/// failing branch rather than to have its failing branches covered.
+fn requested_job(args: &[String]) -> Option<JobId> {
+    let at = args.iter().position(|arg| arg == REVEAL_FLAG)?;
+    args.get(at + 1)?.parse::<u64>().ok().map(JobId)
 }
 
 /// Forwards everything straight to the webview. The app has no opinion about any of it.
@@ -111,16 +161,28 @@ pub fn run() {
     // is still signing in is exactly what nobody asked for. Everything else — the webview,
     // the link to the daemon, the tray — is identical either way, so this is one bool and
     // the two places that would otherwise show the window.
-    let into_the_tray = std::env::args().skip(1).any(|arg| arg == TRAY_FLAG);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let into_the_tray = args.iter().any(|arg| arg == TRAY_FLAG);
+    // A `--reveal` is somebody asking to be shown something, which is the opposite of what
+    // the login entry asks for. It wins.
+    let asked_for = requested_job(&args);
 
     let mut builder = tauri::Builder::default();
 
     #[cfg(desktop)]
     {
         // A download handed over from the browser must reach the window that is already
-        // open, not a second copy of it with its own tray icon.
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        // open, not a second copy of it with its own tray icon. The second copy's
+        // arguments are the message: `--reveal 42` from the daemon arrives here, and the
+        // window that was already running is the one that acts on it.
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             chrome::reveal(app);
+            if let Some(job) = requested_job(&args) {
+                // Emitted rather than stashed: this instance already has a webview with a
+                // listener on it, which is the case `Requested` exists to cover the
+                // absence of.
+                let _ = app.emit(REVEAL, job);
+            }
         }));
     }
 
@@ -137,7 +199,9 @@ pub fn run() {
                 .build(),
         )
         .on_page_load(move |webview, payload| {
-            if !into_the_tray && payload.event() == tauri::webview::PageLoadEvent::Finished {
+            if (!into_the_tray || asked_for.is_some())
+                && payload.event() == tauri::webview::PageLoadEvent::Finished
+            {
                 let _ = webview.window().show();
             }
         })
@@ -150,6 +214,7 @@ pub fn run() {
             send,
             watch,
             connected,
+            requested,
             toast::notify,
             tray::tooltip
         ])
@@ -157,6 +222,7 @@ pub fn run() {
             let handle = app.handle().clone();
             let sink: Arc<dyn Sink> = Arc::new(ToWebview(handle.clone()));
 
+            app.manage(Requested(std::sync::Mutex::new(asked_for)));
             app.manage(Bridge {
                 primary: Link::spawn(Role::Primary, SubscriptionScope::Summary, sink.clone()),
                 detail: Link::spawn(Role::Detail, SubscriptionScope::None, sink),
@@ -171,7 +237,7 @@ pub fn run() {
             // The page still loads, hidden — a tray start pays the webview's cold start at
             // sign-in so that opening the window later is instant, which is the same trade
             // the hide-on-close path already makes.
-            if !into_the_tray {
+            if !into_the_tray || asked_for.is_some() {
                 chrome::show_when_loaded(&handle);
             }
             tray::install(&handle)?;

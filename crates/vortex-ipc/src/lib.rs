@@ -32,7 +32,7 @@ use unix as sys;
 
 mod launch;
 
-pub use launch::{connect_or_start, start};
+pub use launch::{connect_or_start, open_app, spawn_beside, start};
 pub use sys::{ClientStream, ServerStream};
 
 /// The address clients connect to and the daemon listens on.

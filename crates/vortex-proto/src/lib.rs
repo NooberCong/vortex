@@ -167,7 +167,8 @@ pub enum Category {
 }
 
 impl Category {
-    /// Sidebar order (05 §Layout).
+    /// The order the app's filter bar draws them in (05 §Layout). `KINDS` in
+    /// `store.svelte.ts` is this list, and has to stay this list.
     pub const ALL: [Category; 7] = [
         Category::Video,
         Category::Audio,
@@ -662,6 +663,18 @@ pub enum Command {
     SetSettings { settings: Settings },
     /// The extension answering `UrlExpired`.
     RenewedUrl { job: JobId, envelope: RequestEnvelope },
+    /// "Bring the window up, and put this job in front of me."
+    ///
+    /// The one command whose subject is the *app* rather than the queue, and it exists
+    /// because the extension cannot reach the window: they are two processes that share a
+    /// daemon and nothing else. `None` is a bare "open Vortex", which is what the popup's
+    /// footer asks for.
+    ///
+    /// The daemon does not own a window either — it starts one, and a second copy of an
+    /// app that is already running is folded into the first by the single-instance plugin
+    /// (`apps/desktop/src-tauri/src/lib.rs`). So one path covers both "it is not running"
+    /// and "it is behind the browser".
+    Reveal { job: Option<JobId> },
     /// Capture heartbeat. The extension refuses to cancel a browser download unless this
     /// round-trips (03 §2 — the non-negotiable rule).
     Ping,

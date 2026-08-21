@@ -124,7 +124,10 @@ async function consider(item: {
   if ((await stateOf(item.id)) !== "interrupted") return;
 
   await browser.downloads.erase({ id: item.id });
-  host.send({ cmd: "submit", spec });
+  // The download the user was watching is now gone from the browser's own list, erased. The
+  // receipt in `handoff.hand` is the only thing between that and a click that appears to
+  // have done nothing (03 §2 — the acknowledgement).
+  handoff.hand(spec, tabId);
 }
 
 async function eligible(item: {

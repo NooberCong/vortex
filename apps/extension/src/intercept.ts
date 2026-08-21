@@ -43,7 +43,6 @@ import * as capture from "./capture";
 import type { HttpHeader } from "./envelope";
 import { describeTab, headerValue, isAttachment, synthesise } from "./envelope";
 import * as handoff from "./handoff";
-import * as host from "./host";
 
 /**
  * How long the response may stay suspended.
@@ -118,7 +117,10 @@ async function commit(details: Response): Promise<{ cancel?: boolean }> {
   // `{}` is "proceed unchanged". The browser downloads it, and channel 2 gets its turn.
   if (!spec) return {};
 
-  host.send({ cmd: "submit", spec });
+  // Nothing was ever written and nothing appears in the browser's download list, which is
+  // this channel's whole advantage — and, from the page's side, indistinguishable from a
+  // link that did nothing. `hand` is what closes that gap (03 §2 — the acknowledgement).
+  handoff.hand(spec, details.tabId >= 0 ? details.tabId : undefined);
   return { cancel: true };
 }
 

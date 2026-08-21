@@ -11,7 +11,7 @@ use tauri::{AppHandle, Manager, WebviewWindow};
 ///
 /// Failure is not an error. Mica needs Windows 11 build 22000 or newer, and on anything
 /// older the window simply keeps the solid `--bg` the stylesheet already painted. A
-/// download manager that refuses to open because it could not blur its own sidebar would
+/// download manager that refuses to open because it could not blur its own chrome would
 /// be a worse product than one that looks slightly flatter on Windows 10.
 pub fn dress(window: &WebviewWindow) {
     #[cfg(windows)]
