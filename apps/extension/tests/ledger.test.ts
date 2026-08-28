@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing";
 
 import type { RequestEnvelope } from "@vortex/proto";
@@ -17,6 +18,10 @@ describe("the request ledger", () => {
   beforeEach(() => {
     fakeBrowser.reset();
     ledger.__resetForTests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("gives back the headers the browser used for a URL", async () => {
@@ -57,6 +62,48 @@ describe("the request ledger", () => {
     expect(await ledger.lookup(7, "https://example.com/120")).not.toBeNull();
     // 0..119 have been evicted: 620 - 500 = 120.
     expect(await ledger.lookup(7, "https://example.com/119")).toBeNull();
+  });
+
+  it("stops at the byte ceiling long before it reaches the entry ceiling", async () => {
+    // The count is not the thing that runs out. A remembered POST body is orders of
+    // magnitude bigger than a header list, and the session area is one pool shared with
+    // every other tab — so five hundred of these would be the whole extension's budget
+    // spent on one tab, and the write would start failing for everything.
+    for (let i = 0; i < 12; i++) {
+      ledger.record(envelope(`https://example.com/${i}`, { bodyBase64: "x".repeat(64 * 1024) }));
+    }
+    await ledger.flush();
+
+    const kept = (await fakeBrowser.storage.session.get("ledger:7"))["ledger:7"] as RequestEnvelope[];
+    expect(kept.length).toBeLessThan(12);
+    expect(kept.reduce((n, e) => n + JSON.stringify(e).length, 0)).toBeLessThanOrEqual(256 * 1024);
+    // And the newest is what survived, which is the entry a download starting now is about.
+    expect(await ledger.lookup(7, "https://example.com/11")).not.toBeNull();
+    expect(await ledger.lookup(7, "https://example.com/0")).toBeNull();
+  });
+
+  it("keeps the newest entry even when it is the whole budget by itself", async () => {
+    // An oversized entry costs the ones behind it, never itself. A ledger that answered
+    // nothing at all would be the more expensive outcome by far.
+    ledger.record(envelope("https://example.com/old"));
+    ledger.record(
+      envelope("https://example.com/huge", { headers: [["X-Big", "h".repeat(300 * 1024)]] }),
+    );
+    await ledger.flush();
+
+    expect(await ledger.lookup(7, "https://example.com/huge")).not.toBeNull();
+    expect(await ledger.lookup(7, "https://example.com/old")).toBeNull();
+  });
+
+  it("still answers a lookup when the write it depends on could not happen", async () => {
+    // A full session area used to arrive here as an unhandled rejection out of `flush`,
+    // which `lookup` awaits — so a tab that ran out of room lost its headers *and* threw
+    // at whatever went asking for them. A write that cannot happen is a cache miss.
+    vi.spyOn(browser.storage.session, "set").mockRejectedValue(new Error("quota exceeded"));
+    ledger.record(envelope("https://example.com/a"));
+
+    await expect(ledger.lookup(7, "https://example.com/a")).resolves.toBeNull();
+    await expect(ledger.flush()).resolves.toBeUndefined();
   });
 
   it("does not lose entries when two flushes overlap", async () => {

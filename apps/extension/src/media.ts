@@ -29,6 +29,7 @@ import * as hook from "./hook";
 import * as host from "./host";
 import * as ledger from "./ledger";
 import { tell } from "./messages";
+import * as session from "./session";
 import * as settings from "./settings";
 
 const MANIFEST_PATH = /\.(m3u8|mpd)(\?|#|$)/i;
@@ -80,10 +81,43 @@ const bursts = new Map<number, number>();
 /** The ladders currently known per tab, so a re-injected overlay can ask for them again. */
 const candidatesKey = (tabId: number) => `media:${tabId}`;
 
+/**
+ * How many ladders one tab remembers.
+ *
+ * A navigation or a tab close clears the list, which is enough for a page that plays one
+ * video and not for the page that never navigates: a player re-mints its manifest URL as
+ * the signature expires, every re-mint is a URL this module has never seen, and each one
+ * arrives back as another ladder to append. Unbounded growth in a session area shared with
+ * every other tab (`src/session.ts`). Merging them on the path instead of the full URL
+ * would be the tighter fix and the wrong one — a site that identifies a video by query
+ * (`/playlist?v=…`) would have its videos collapsed into one — so the list is simply
+ * bounded, newest kept. More than this and the overlay is a list nobody reads anyway.
+ */
+const MAX_CANDIDATES = 24;
+
+/**
+ * One write chain per tab.
+ *
+ * `deliver` reads a tab's ladders, merges, and writes them back, and two probes answered
+ * in the same turn interleave: the second read happens before the first write lands, so
+ * the ladder that arrived first is overwritten by a list that never had it. It presents as
+ * a page with two videos on it offering one, at random. The ledger carries the same guard
+ * for the same reason (`src/ledger.ts`).
+ */
+const writes = new Map<number, Promise<void>>();
+
+function serialise(tabId: number, work: () => Promise<void>): void {
+  const next = (writes.get(tabId) ?? Promise.resolve()).then(work).catch(() => {});
+  writes.set(tabId, next);
+  void next.finally(() => {
+    if (writes.get(tabId) === next) writes.delete(tabId);
+  });
+}
+
 export function listen(): void {
   host.onEvent((event) => {
     if (event.event !== "mediaFound") return;
-    void deliver(event.tab, event.candidates);
+    serialise(event.tab, () => deliver(event.tab, event.candidates));
   });
 
   browser.tabs.onRemoved.addListener((tabId) => {
@@ -239,8 +273,9 @@ async function deliver(tabId: number, candidates: MediaCandidate[]): Promise<voi
     if (at >= 0) merged[at] = candidate;
     else merged.push(candidate);
   }
-  await browser.storage.session.set({ [key]: merged });
-  await tell(tabId, { kind: "candidates", candidates: merged });
+  const kept = merged.slice(Math.max(0, merged.length - MAX_CANDIDATES));
+  await session.store({ [key]: kept });
+  await tell(tabId, { kind: "candidates", candidates: kept });
 }
 
 /** What a freshly-injected overlay asks for, after a worker restart or an SPA navigation. */
@@ -253,4 +288,5 @@ export async function known(tabId: number): Promise<MediaCandidate[]> {
 export function __resetForTests(): void {
   probed.clear();
   bursts.clear();
+  writes.clear();
 }

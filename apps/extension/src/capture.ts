@@ -45,6 +45,21 @@ const WORTH_KEEPING = new Set([
   "other",
 ]);
 
+/**
+ * How much of a request body is worth remembering.
+ *
+ * A body is kept so that a download which came from a POST can be replayed as one, and
+ * every such body is a form: a few hundred bytes of fields, or a JSON query. What lives
+ * above this ceiling is a file upload, which is not a request that turns into a download
+ * and is not something the daemon should be re-sending on the user's behalf either.
+ *
+ * The number matters more than it looks. Base64 inflates by a third, an envelope is
+ * carried in a session area of ~10 MB shared by every tab (`src/session.ts`), and the
+ * previous ceiling of a megabyte meant a single remembered upload could crowd out an
+ * entire tab's worth of headers.
+ */
+const MAX_BODY_BYTES = 64 * 1024;
+
 /** In-flight envelopes, keyed by `requestId`. Discarded when the request ends. */
 const inFlight = new Map<string, RequestEnvelope>();
 /** A hard ceiling, so a page that opens thousands of connections cannot grow the map. */
@@ -241,7 +256,7 @@ function encodeBody(
   if (body.raw?.length) {
     const chunks = body.raw.map((part) => new Uint8Array(part.bytes ?? new ArrayBuffer(0)));
     const total = chunks.reduce((sum, c) => sum + c.length, 0);
-    if (total === 0 || total > 1 << 20) return undefined;
+    if (total === 0 || total > MAX_BODY_BYTES) return undefined;
     const flat = new Uint8Array(total);
     let at = 0;
     for (const chunk of chunks) {
@@ -262,7 +277,10 @@ function encodeBody(
       }
     }
     const text = encoded.toString();
-    return text ? btoa(text) : undefined;
+    // The same ceiling as a raw body, for the same reason: a form field can hold a
+    // document, and a form that big is not one that produced a download.
+    if (!text || text.length > MAX_BODY_BYTES) return undefined;
+    return btoa(text);
   }
   return undefined;
 }

@@ -34,6 +34,7 @@ import { browser } from "wxt/browser";
 import { isTerminal, type Event, type JobId, type JobState, type JobView } from "@vortex/proto";
 import * as toolbar from "./toolbar";
 import * as host from "./host";
+import * as session from "./session";
 
 const KEY = "activeJobs";
 
@@ -138,9 +139,12 @@ async function settle(jobs: Set<JobId>): Promise<void> {
   // jobs, and the mirror has to stay accurate even when the badge does not change.
   const now = ids.join(",");
   if (now === mirrored) return;
-  mirrored = now;
 
-  await browser.storage.session.set({ [KEY]: ids });
+  // Recorded only once it is actually written, because the shortcut above is what makes
+  // that matter: a mirror claimed for a write that did not land leaves the next worker
+  // reading a count from before the failure, and nothing corrects it until the membership
+  // happens to change again.
+  mirrored = (await session.store({ [KEY]: ids })) ? now : null;
   await toolbar.paint(ids.length);
 }
 

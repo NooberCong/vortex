@@ -24,9 +24,20 @@
 import { browser } from "wxt/browser";
 
 import type { RequestEnvelope } from "@vortex/proto";
+import * as session from "./session";
 
 /** Per 03 §1. Old entries are evicted first; a tab that browses does not grow forever. */
 const MAX_PER_TAB = 500;
+/**
+ * And a ceiling in bytes, because the count is not the thing that runs out.
+ *
+ * The session area is one ~10 MB pool for the whole extension (`src/session.ts`) while
+ * this cap is per tab, so a count on its own bounds nothing: an entry is a few kilobytes
+ * of headers most of the time and a POST body the rest of it, and five hundred of the
+ * second kind in each of a dozen tabs is far past the pool on its own. Whichever cap bites
+ * first wins; in ordinary browsing that is still the count.
+ */
+const MAX_BYTES_PER_TAB = 256 * 1024;
 const FLUSH_DELAY = 250;
 
 const key = (tabId: number) => `ledger:${tabId}`;
@@ -43,7 +54,10 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 const writes = new Map<number, Promise<void>>();
 
 function serialise(tabId: number, work: () => Promise<void>): Promise<void> {
-  const next = (writes.get(tabId) ?? Promise.resolve()).then(work, work);
+  // The chain is not allowed to reject. `flush` awaits it and `lookup` awaits `flush`, so
+  // a failed write would otherwise cost a download both its headers *and* the lookup that
+  // went asking for them. Storage that could not be written is a cache miss, not an error.
+  const next = (writes.get(tabId) ?? Promise.resolve()).then(work).catch(() => {});
   writes.set(tabId, next);
   void next.finally(() => {
     if (writes.get(tabId) === next) writes.delete(tabId);
@@ -86,10 +100,7 @@ export async function flush(): Promise<void> {
   for (const [tabId, additions] of batches) {
     void serialise(tabId, async () => {
       const merged = [...(await read(tabId)), ...additions];
-      // Newest wins: an expiring signed URL is re-minted under the same path, and the
-      // fresh one is the only one worth replaying.
-      const trimmed = merged.slice(Math.max(0, merged.length - MAX_PER_TAB));
-      await browser.storage.session.set({ [key(tabId)]: trimmed });
+      await session.store({ [key(tabId)]: trim(merged) });
     });
   }
 
@@ -98,6 +109,27 @@ export async function flush(): Promise<void> {
   // still be writing them; returning before *that* lands is how a lookup sees a ledger
   // that is missing the request it was called about.
   await Promise.all([...writes.values()]);
+}
+
+/**
+ * The newest entries that fit under both caps.
+ *
+ * Walks backwards, because newest wins twice over: an expiring signed URL is re-minted
+ * under the same path and only the fresh one is worth replaying, and the entry a download
+ * starting now is about is by definition one of the last few. The newest is kept whatever
+ * it measures — an oversized entry costs the ones behind it, never itself, because a
+ * ledger that answered nothing would be the more expensive outcome.
+ */
+function trim(entries: RequestEnvelope[]): RequestEnvelope[] {
+  let bytes = 0;
+  let from = entries.length;
+  while (from > 0 && entries.length - from < MAX_PER_TAB) {
+    const size = session.measure(entries[from - 1]);
+    if (bytes + size > MAX_BYTES_PER_TAB && from < entries.length) break;
+    bytes += size;
+    from--;
+  }
+  return from === 0 ? entries : entries.slice(from);
 }
 
 /**

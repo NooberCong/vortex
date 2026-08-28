@@ -17,6 +17,7 @@ import { browser } from "wxt/browser";
 
 import type { Settings } from "@vortex/proto";
 import * as host from "./host";
+import * as session from "./session";
 
 const KEY = "settings";
 
@@ -68,7 +69,7 @@ export async function current(): Promise<Effective> {
 /** Records what the daemon just told us. Called from the event stream and from `refresh`. */
 export function adopt(settings: Settings): void {
   memo = settings;
-  void browser.storage.session.set({ [KEY]: settings });
+  void session.store({ [KEY]: settings });
 }
 
 /**

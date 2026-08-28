@@ -63,8 +63,12 @@ interface RequestEnvelope {
 }
 ```
 
-Bounded: 500 entries per tab, evicted LRU, cleared on tab close. This ledger is what makes
-handoff work — the engine replays exactly what the browser sent.
+Bounded twice over, because the count is not the thing that runs out: 500 entries per tab
+**and** 256 KB per tab, whichever bites first, evicted oldest-first and cleared on tab
+close. A remembered POST body (capped at 64 KB — above that it is a file upload, not a
+request that becomes a download) is orders of magnitude larger than a header list, and the
+session area is one pool shared with every other tab. This ledger is what makes handoff
+work — the engine replays exactly what the browser sent.
 
 ### 2 — Download takeover
 
@@ -409,6 +413,11 @@ The MV3 service worker is evicted after ~30 s idle. Non-negotiable rules:
   async callback is silently lost on the next wake.
 - **Zero in-memory state.** The request ledger and pending takeovers live in
   `chrome.storage.session`.
+- **The session area is finite and shared.** ~10 MB for the whole extension, while every
+  bound above it is per tab. `src/session.ts` owns that fact: a write that overflows drops
+  the largest cached keys and retries, never the key being written and never the small ones
+  (the settings mirror, the badge's job ids). Everything large in there is a cache, so the
+  cost of a reclaim is a probe, never a download. Nothing writes the area directly.
 - **Reconnect the native port lazily.** An open `connectNative` port extends the worker's
   life, but do not depend on that — treat every wake as cold and re-establish.
 - Keep an alarm (`chrome.alarms`, 1 min) as a liveness floor for reconnect-on-failure only —

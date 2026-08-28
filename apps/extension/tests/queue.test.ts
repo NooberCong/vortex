@@ -266,4 +266,24 @@ describe("surviving an eviction", () => {
     await queue.adopt({ event: "jobAdded", job: view({ id: 1 as JobId }) });
     expect(drawn().text).toBe("1");
   });
+
+  it("does not claim to have mirrored a write that did not happen", async () => {
+    // The mirror is skipped when nothing changed, so recording one for a write that failed
+    // means the next eviction picks up a count from before the failure and nothing corrects
+    // it until the membership happens to change again. And the write most likely to fail is
+    // the one made when the session area is full — which is to say, when the browser has
+    // been open long enough for there to be a queue worth remembering.
+    // Both the write and the retry that follows the reclaim: a full area with nothing
+    // sacrificial in it is the case where the value really cannot be stored.
+    vi.spyOn(browser.storage.session, "set")
+      .mockRejectedValueOnce(new Error("quota exceeded"))
+      .mockRejectedValueOnce(new Error("quota exceeded"));
+    await queue.adopt({ event: "jobAdded", job: view({ id: 1 as JobId }) });
+    expect(drawn().text).toBe("1");
+    expect(await browser.storage.session.get("activeJobs")).toEqual({});
+
+    // The badge was still drawn, and the very next change writes rather than short-circuits.
+    await queue.adopt({ event: "jobAdded", job: view({ id: 2 as JobId }) });
+    expect(await browser.storage.session.get("activeJobs")).toEqual({ activeJobs: [1, 2] });
+  });
 });
