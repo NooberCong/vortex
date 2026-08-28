@@ -1825,7 +1825,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hostile-server"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -5341,7 +5341,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vortex-app"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "notify-rust",
  "serde",
@@ -5364,7 +5364,7 @@ dependencies = [
 
 [[package]]
 name = "vortex-bench"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -5378,7 +5378,7 @@ dependencies = [
 
 [[package]]
 name = "vortex-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -5394,7 +5394,7 @@ dependencies = [
 
 [[package]]
 name = "vortex-engine"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5425,7 +5425,7 @@ dependencies = [
 
 [[package]]
 name = "vortex-host"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -5440,7 +5440,7 @@ dependencies = [
 
 [[package]]
 name = "vortex-ipc"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "libc",
  "tokio",
@@ -5450,7 +5450,7 @@ dependencies = [
 
 [[package]]
 name = "vortex-media"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aes",
  "anyhow",
@@ -5472,7 +5472,7 @@ dependencies = [
 
 [[package]]
 name = "vortex-proto"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "rmp-serde",
  "serde",
@@ -5483,7 +5483,7 @@ dependencies = [
 
 [[package]]
 name = "vortex-setup"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "dirs",
  "serde",
@@ -5495,7 +5495,7 @@ dependencies = [
 
 [[package]]
 name = "vortexd"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
